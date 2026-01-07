@@ -243,8 +243,8 @@ export default function ImageToText() {
   ];
 
   const kpis = kpisData?.kpis.length ? kpisData.kpis : dummyKpis;
-  const languages = translationsData?.translations.length ? translationsData.translations : mockLanguages;
-  const attributes = generatedData?.attributes.length ? generatedData.attributes : mockAttributes;
+  const languages = translationsData?.translations || [];
+  const attributes = generatedData?.attributes || [];
 
   const handleCopy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -539,14 +539,14 @@ export default function ImageToText() {
                   size="sm" 
                   variant="ghost" 
                   className="h-6 gap-1 text-xs"
-                  onClick={() => handleCopy("Premium Cotton Blend Unisex T-Shirt - Navy Blue | Comfortable Casual Wear", "Title")}
+                  onClick={() => handleCopy(generatedData?.title || "", "Title")}
                 >
                   <Copy className="w-3 h-3" />
                   Copy
                 </Button>
               </div>
               <div className="p-3 bg-muted/50 rounded-lg text-sm text-foreground">
-                {generatedData?.title || "Premium Cotton Blend Unisex T-Shirt - Navy Blue | Comfortable Casual Wear"}
+                {generatedData?.title || ""}
               </div>
             </div>
 
@@ -557,7 +557,7 @@ export default function ImageToText() {
                   size="sm" 
                   variant="ghost" 
                   className="h-6 gap-1 text-xs"
-                  onClick={() => handleCopy("Elevate your everyday style with this premium cotton blend t-shirt. Features a classic fit, breathable fabric, and versatile navy blue color perfect for any casual occasion.", "Short description")}
+                  onClick={() => handleCopy(generatedData?.shortDescription || "", "Short description")}
                 >
                   <Copy className="w-3 h-3" />
                   Copy
@@ -565,7 +565,7 @@ export default function ImageToText() {
               </div>
               <Textarea 
                 className="min-h-[80px] resize-none bg-muted/50"
-                value={generatedData?.shortDescription || "Elevate your everyday style with this premium cotton blend t-shirt. Features a classic fit, breathable fabric, and versatile navy blue color perfect for any casual occasion."}
+                value={generatedData?.shortDescription || ""}
                 readOnly
               />
             </div>
@@ -575,13 +575,7 @@ export default function ImageToText() {
                 <label className="text-sm font-medium text-foreground">Bullet Points</label>
               </div>
               <ul className="space-y-2">
-                {(generatedData?.bulletPoints || [
-                  'Premium cotton-polyester blend for ultimate comfort',
-                  'Classic unisex fit suitable for all body types',
-                  'Easy care - machine washable',
-                  'Available in sizes S to XXL',
-                  'Perfect for casual and semi-formal occasions'
-                ]).map((point, i) => (
+                {(generatedData?.bulletPoints || []).map((point, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm">
                     <span className="text-primary mt-1">•</span>
                     <span className="text-foreground">{point}</span>
@@ -679,65 +673,115 @@ export default function ImageToText() {
             </div>
           </div>
 
-          {/* Localization QA */}
-          <div className="glass-card rounded-xl p-6 opacity-0 animate-fade-in" style={{ animationDelay: '400ms', animationFillMode: 'forwards' }}>
-            <h3 className="text-lg font-semibold text-foreground mb-4">Localization Quality Check</h3>
-            
-            <div className="space-y-4 max-h-[400px] overflow-y-auto">
-              {translationsLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-                </div>
-              ) : languages.length > 0 ? languages.map((lang) => (
-                <div 
-                  key={lang.code}
-                  className="p-4 bg-muted/30 rounded-lg"
-                >
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <span>{lang.flag}</span>
-                      <span className="font-medium text-foreground">{lang.name}</span>
-                    </div>
-                    <Badge 
-                      variant={lang.status === 'complete' ? 'default' : 'secondary'}
-                      className={cn(
-                        lang.status === 'complete' && "bg-success/10 text-success",
-                        lang.status === 'pending' && "bg-warning/10 text-warning",
-                        lang.status === 'error' && "bg-destructive/10 text-destructive"
-                      )}
-                    >
-                      {lang.status === 'complete' && 'Complete'}
-                      {lang.status === 'pending' && 'Pending'}
-                      {lang.status === 'error' && 'Issues Found'}
-                    </Badge>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">Grammar</span>
-                      <CheckCircle className="w-4 h-4 text-success" />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">Keywords</span>
-                      <span className="text-success font-medium">94%</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">Cultural</span>
-                      <span className="text-success font-medium">100%</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">Forbidden</span>
-                      <CheckCircle className="w-4 h-4 text-success" />
-                    </div>
-                  </div>
-                </div>
-              )) : (
-                <div className="text-center py-8 text-sm text-muted-foreground">
-                  Generate description to see quality checks
-                </div>
-              )}
-            </div>
+            {/* Localization QA */}
+            <div
+              className="glass-card rounded-xl p-6 opacity-0 animate-fade-in"
+              style={{ animationDelay: '400ms', animationFillMode: 'forwards' }}
+            >
+              {/* UI container */}
 
+              <h3 className="text-lg font-semibold text-foreground mb-4">
+                Localization Quality Check
+              </h3>
+              {/* Heading  */}
+
+              <div className="space-y-4 max-h-[400px] overflow-y-auto">
+                {/* Scroll container */}
+
+                {translationsLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                  </div>
+                  //Loading state 
+                ) : languages.length > 0 ? (
+                  languages.map((lang) => {
+                    // get backend QA data for this language
+                    const qc = qualityCheckData?.qualityChecks.find(
+                      (q) => q.code === lang.code
+                    );
+
+                    return (
+                      <div
+                        key={lang.code}
+                        className="p-4 bg-muted/30 rounded-lg"
+                      >
+                        
+
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <span>{lang.flag}</span>
+                            <span className="font-medium text-foreground">
+                              {lang.name}
+                            </span>
+                          </div>
+
+                          <Badge
+                            variant={lang.status === 'complete' ? 'default' : 'secondary'}
+                            className={cn(
+                              lang.status === 'complete' && "bg-success/10 text-success",
+                              lang.status === 'pending' && "bg-warning/10 text-warning",
+                              lang.status === 'error' && "bg-destructive/10 text-destructive"
+                            )}
+                          >
+                            {lang.status === 'complete' && 'Complete'}
+                            {lang.status === 'pending' && 'Pending'}
+                            {lang.status === 'error' && 'Issues Found'}
+                          </Badge>
+                        </div>
+                        
+
+                        <div className="grid grid-cols-2 gap-3 text-sm">
+                          
+
+                          {/* Grammar */}
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Grammar</span>
+                            {qc?.checks.grammar ? (
+                              <CheckCircle className="w-4 h-4 text-success" />
+                            ) : (
+                              <X className="w-4 h-4 text-destructive" />
+                            )}
+                          </div>
+                          
+
+                          {/* Keywords */}
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Keywords</span>
+                            <span className="font-medium">
+                              {qc ? `${qc.checks.keywords}%` : "--"}
+                            </span>
+                          </div>
+                          
+
+                          {/* Cultural */}
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Cultural</span>
+                            <span className="font-medium">
+                              {qc ? `${qc.checks.cultural}%` : "--"}
+                            </span>
+                          </div>
+                          
+
+                          {/* Forbidden */}
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Forbidden</span>
+                            {qc?.checks.forbidden ? (
+                              <CheckCircle className="w-4 h-4 text-success" />
+                            ) : (
+                              <X className="w-4 h-4 text-destructive" />
+                            )}
+                          </div>
+
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-center py-8 text-sm text-muted-foreground">
+                    Generate description to see quality checks
+                  </div>
+                )}
+              </div>
             <div className="flex gap-2 mt-4">
               <Button 
                 className="flex-1" 
