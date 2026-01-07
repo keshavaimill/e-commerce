@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { 
   Filter, 
   Download, 
@@ -7,7 +8,8 @@ import {
   CheckCircle, 
   XCircle,
   ChevronDown,
-  Search
+  Search,
+  Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -21,16 +23,73 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/api";
 
-const kpis = [
-  { label: "Mismatch Rate", value: "3.2%", change: -12, status: "success" },
-  { label: "Attribute Errors", value: "1,247", change: 8, status: "warning" },
-  { label: "Localization Coverage", value: "87%", change: 15, status: "success" },
-  { label: "Rejection Rate", value: "2.1%", change: -5, status: "success" },
-  { label: "Revenue at Risk", value: "₹2.3Cr", change: -22, status: "warning" },
-];
+interface MismatchKPI {
+  label: string;
+  value: string;
+  change: number;
+  status: "success" | "warning" | "error";
+}
 
-const tableData = [
+interface MismatchRow {
+  sku: string;
+  marketplace: string;
+  mismatchScore: number;
+  attributeErrors: string[];
+  localMissing: string[];
+  category: string;
+  issueType: string;
+  listingProb: number;
+  impactScore: number;
+}
+
+interface MismatchListResponse {
+  data: MismatchRow[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+  filters: {
+    categories: string[];
+    marketplaces: string[];
+    regions: string[];
+  };
+}
+
+interface AttributeComparison {
+  attribute: string;
+  aiDetected: string;
+  marketplaceListing: string;
+  match: boolean;
+  confidence: number;
+}
+
+interface AttributeComparisonResponse {
+  sku: string;
+  comparison: AttributeComparison[];
+}
+
+interface LocalizationStatus {
+  [region: string]: {
+    [lang: string]: {
+      status: "complete" | "missing" | "pending";
+      completeness: number;
+    };
+  };
+}
+
+interface LocalizationResponse {
+  sku: string;
+  localization: LocalizationStatus;
+  missingTranslations: number;
+  incorrectTranslations: number;
+  nonCompliantKeywords: number;
+}
+
+const mockTableData: MismatchRow[] = [
   {
     sku: "SKU-8742",
     marketplace: "Amazon.in",
@@ -103,6 +162,7 @@ const flagEmojis: Record<string, string> = {
 };
 
 export default function MismatchEngine() {
+  const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [category, setCategory] = useState("all");
   const [brand, setBrand] = useState("all");
@@ -111,6 +171,98 @@ export default function MismatchEngine() {
   const [region, setRegion] = useState("all");
   const [issueType, setIssueType] = useState("all");
   const [selectedSku, setSelectedSku] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+
+  // Build query params
+  const queryParams = new URLSearchParams();
+  if (searchQuery) queryParams.set("search", searchQuery);
+  if (category !== "all") queryParams.set("category", category);
+  if (brand !== "all") queryParams.set("brand", brand);
+  if (marketplace !== "all") queryParams.set("marketplace", marketplace);
+  if (language !== "all") queryParams.set("language", language);
+  if (region !== "all") queryParams.set("region", region);
+  if (issueType !== "all") queryParams.set("issueType", issueType);
+  queryParams.set("page", page.toString());
+  queryParams.set("limit", "50");
+
+  // Fetch KPIs
+  const { data: kpisData, isLoading: kpisLoading } = useQuery<{ kpis: MismatchKPI[] }>({
+    queryKey: ["mismatch", "kpis"],
+    queryFn: () => apiClient.get<{ kpis: MismatchKPI[] }>("/mismatch/kpis"),
+  });
+
+  // Fetch mismatch list
+  const { data: mismatchData, isLoading: mismatchLoading, error: mismatchError } = useQuery<MismatchListResponse>({
+    queryKey: ["mismatch", "list", queryParams.toString()],
+    queryFn: () => apiClient.get<MismatchListResponse>(`/mismatch/list?${queryParams.toString()}`),
+  });
+
+  // Fetch attribute comparison for selected SKU
+  const { data: attributeData, isLoading: attributeLoading } = useQuery<AttributeComparisonResponse>({
+    queryKey: ["mismatch", "attributes", selectedSku],
+    queryFn: () => apiClient.get<AttributeComparisonResponse>(`/mismatch/sku/${selectedSku}/attributes`),
+    enabled: !!selectedSku,
+  });
+
+  // Fetch localization for selected SKU
+  const { data: localizationData, isLoading: localizationLoading } = useQuery<LocalizationResponse>({
+    queryKey: ["mismatch", "localization", selectedSku],
+    queryFn: () => apiClient.get<LocalizationResponse>(`/mismatch/sku/${selectedSku}/localization`),
+    enabled: !!selectedSku,
+  });
+
+  // Export mutation
+  const exportMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(`${import.meta.env.VITE_API_URL ?? "https://api.example.com/api/v1"}/mismatch/export?${queryParams.toString()}`, {
+        method: "GET",
+      });
+      if (!response.ok) throw new Error("Export failed");
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `mismatch-export-${new Date().toISOString()}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    },
+    onSuccess: () => {
+      toast({
+        title: "Export completed",
+        description: "Data export downloaded successfully",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Export failed",
+        description: "Failed to export data",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Fix mutation
+  const fixMutation = useMutation({
+    mutationFn: async (data: { sku: string; action: string; parameters?: Record<string, unknown> }) => {
+      return apiClient.post<{ success: boolean; message: string; jobId: string; estimatedTime: string }>("/mismatch/fix", data);
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Fix process started",
+        description: data.message,
+      });
+      queryClient.invalidateQueries({ queryKey: ["mismatch"] });
+    },
+    onError: () => {
+      toast({
+        title: "Fix failed",
+        description: "Failed to start fix process",
+        variant: "destructive",
+      });
+    },
+  });
 
   const handleClearFilters = () => {
     setSearchQuery("");
@@ -134,114 +286,54 @@ export default function MismatchEngine() {
   };
 
   const handleExport = () => {
-    toast({
-      title: "Export started",
-      description: "Preparing data export...",
-    });
+    exportMutation.mutate();
   };
 
   const handleViewDetails = (sku: string) => {
     setSelectedSku(sku);
-    toast({
-      title: "View details",
-      description: `Viewing details for ${sku}`,
-    });
   };
 
   const handleFix = (sku: string) => {
-    toast({
-      title: "Fix issue",
-      description: `Starting fix process for ${sku}`,
+    fixMutation.mutate({
+      sku,
+      action: "update_attributes",
+      parameters: {
+        marketplace: mismatchData?.data.find((r) => r.sku === sku)?.marketplace,
+      },
     });
   };
 
-  // Filter the table data based on current filter values
-  const filteredData = tableData.filter((row) => {
-    // Search query filter
-    if (searchQuery && !row.sku.toLowerCase().includes(searchQuery.toLowerCase())) {
-      return false;
-    }
+  // Fallback dummy KPIs
+  const dummyKpis: MismatchKPI[] = [
+    { label: "Mismatch Rate", value: "3.2%", change: -12, status: "success" },
+    { label: "Attribute Errors", value: "1,247", change: 8, status: "warning" },
+    { label: "Localization Coverage", value: "87%", change: 15, status: "success" },
+    { label: "Rejection Rate", value: "2.1%", change: -5, status: "success" },
+    { label: "Revenue at Risk", value: "₹2.3Cr", change: -22, status: "warning" },
+  ];
 
-    // Category filter (case-insensitive)
-    if (category !== "all" && row.category.toLowerCase() !== category.toLowerCase()) {
-      return false;
-    }
-
-    // Marketplace filter
-    if (marketplace !== "all") {
-      const marketplaceMap: Record<string, string> = {
-        "amazon": "Amazon.in",
-        "amazon-com": "Amazon.com",
-        "flipkart": "Flipkart",
-        "myntra": "Myntra",
-        "takealot": "Takealot",
-        "checkers": "Checkers",
-        "woolworths": "Woolworths",
-        "makro": "Makro",
-        "shopify": "Shopify",
-        "magento": "Magento",
-        "woocommerce": "WooCommerce",
-        "ebay": "eBay",
-        "walmart": "Walmart"
-      };
-      if (row.marketplace !== marketplaceMap[marketplace]) {
-        return false;
-      }
-    }
-
-    // Issue Type filter
-    if (issueType !== "all") {
-      const issueTypeMap: Record<string, string> = {
-        "color": "Color Mismatch",
-        "size": "Size Mismatch",
-        "local": "Localization"
-      };
-      // Check if issue type matches or contains the filter value
-      const expectedType = issueTypeMap[issueType];
-      if (expectedType && !row.issueType.includes(expectedType.split(" ")[0])) {
-        return false;
-      }
-    }
-
-    // Language filter (show items where this language is missing)
-    if (language !== "all") {
-      if (!row.localMissing.includes(language)) {
-        return false;
-      }
-    }
-
-    // Region filter (based on marketplace)
-    if (region !== "all") {
-      const indiaMarketplaces = ["Amazon.in", "Flipkart", "Myntra"];
-      const southAfricaMarketplaces = ["Takealot", "Checkers", "Woolworths", "Makro"];
-      const globalMarketplaces = ["Amazon.com", "eBay", "Shopify", "Magento", "WooCommerce", "Walmart"];
-      
-      if (region === "india" && !indiaMarketplaces.includes(row.marketplace)) {
-        return false;
-      }
-      if (region === "south_africa" && !southAfricaMarketplaces.includes(row.marketplace)) {
-        return false;
-      }
-      if (region === "global" && !globalMarketplaces.includes(row.marketplace)) {
-        return false;
-      }
-    }
-
-    // Brand filter (not in data yet, but keeping for future)
-    // if (brand !== "all") {
-    //   // Implement when brand data is available
-    // }
-
-    return true;
-  });
+  const kpis = kpisData?.kpis.length ? kpisData.kpis : dummyKpis;
+  const tableData = mismatchData?.data.length ? mismatchData.data : mockTableData;
+  const filteredData = tableData; // Backend handles filtering when API is available
 
   return (
     <div className="p-4 lg:p-6 space-y-6 max-w-[1600px] mx-auto">
       {/* Header */}
       <div className="space-y-2">
-        <h1 className="text-2xl lg:text-3xl font-bold text-foreground">
-          Image-Description Mismatch Engine
-        </h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl lg:text-3xl font-bold text-foreground">
+            Image-Description Mismatch Engine
+          </h1>
+          {mismatchData ? (
+            <Badge variant="default" className="text-[10px] px-1.5 py-0 bg-success/20 text-success border-success/30">
+              API
+            </Badge>
+          ) : mismatchError ? (
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground border-muted">
+              Demo
+            </Badge>
+          ) : null}
+        </div>
         <p className="text-muted-foreground">
           Detect and resolve content quality issues across marketplaces
         </p>
@@ -365,27 +457,48 @@ export default function MismatchEngine() {
 
       {/* KPI Row */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        {kpis.map((kpi, index) => (
-          <div 
-            key={kpi.label}
-            className="glass-card rounded-xl p-4 opacity-0 animate-fade-in"
-            style={{ animationDelay: `${index * 50}ms`, animationFillMode: 'forwards' }}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-muted-foreground">{kpi.label}</span>
-              <Badge 
-                variant="secondary" 
-                className={cn(
-                  "text-xs",
-                  kpi.change < 0 ? "text-success" : "text-warning"
-                )}
-              >
-                {kpi.change > 0 ? '+' : ''}{kpi.change}%
-              </Badge>
+        {kpisLoading ? (
+          Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="glass-card rounded-xl p-4">
+              <div className="flex items-center justify-center h-20">
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
             </div>
-            <div className="text-xl font-bold text-foreground">{kpi.value}</div>
-          </div>
-        ))}
+          ))
+        ) : (
+          kpis.map((kpi, index) => (
+            <div 
+              key={kpi.label}
+              className="glass-card rounded-xl p-4 opacity-0 animate-fade-in"
+              style={{ animationDelay: `${index * 50}ms`, animationFillMode: 'forwards' }}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-muted-foreground">{kpi.label}</span>
+                <div className="flex items-center gap-1">
+                  <Badge 
+                    variant="secondary" 
+                    className={cn(
+                      "text-xs",
+                      kpi.change < 0 ? "text-success" : "text-warning"
+                    )}
+                  >
+                    {kpi.change > 0 ? '+' : ''}{kpi.change}%
+                  </Badge>
+                  {kpisData ? (
+                    <Badge variant="default" className="text-[8px] px-1 py-0 bg-success/20 text-success border-success/30">
+                      API
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[8px] px-1 py-0 text-muted-foreground border-muted">
+                      Demo
+                    </Badge>
+                  )}
+                </div>
+              </div>
+              <div className="text-xl font-bold text-foreground">{kpi.value}</div>
+            </div>
+          ))
+        )}
       </div>
 
       {/* Main Content Grid */}
@@ -397,11 +510,21 @@ export default function MismatchEngine() {
               <div>
                 <h3 className="font-semibold text-foreground">Image-Description Audit Table</h3>
                 <p className="text-sm text-muted-foreground">
-                  Showing {filteredData.length} of {tableData.length} items with issues
+                  {mismatchLoading ? "Loading..." : `Showing ${filteredData.length} of ${mismatchData?.pagination.total ?? 0} items with issues`}
                 </p>
               </div>
-              <Button variant="outline" size="sm" className="gap-2" onClick={handleExport}>
-                <Download className="w-4 h-4" />
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="gap-2" 
+                onClick={handleExport}
+                disabled={exportMutation.isPending}
+              >
+                {exportMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4" />
+                )}
                 Export
               </Button>
             </div>
@@ -423,7 +546,25 @@ export default function MismatchEngine() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredData.length > 0 ? (
+                  {mismatchLoading ? (
+                    <tr>
+                      <td colSpan={10} className="p-8 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                          <span className="text-sm text-muted-foreground">Loading data...</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : mismatchError ? (
+                    <tr>
+                      <td colSpan={10} className="p-8 text-center">
+                        <div className="flex flex-col items-center gap-2">
+                          <AlertTriangle className="w-8 h-8 text-destructive" />
+                          <p className="text-sm text-destructive">Failed to load data</p>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : filteredData.length > 0 ? (
                     filteredData.map((row, index) => (
                       <tr 
                         key={row.sku}
@@ -529,8 +670,13 @@ export default function MismatchEngine() {
                             variant="default" 
                             className="h-8 text-xs"
                             onClick={() => handleFix(row.sku)}
+                            disabled={fixMutation.isPending}
                           >
-                            Fix
+                            {fixMutation.isPending ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              "Fix"
+                            )}
                           </Button>
                         </div>
                       </td>
@@ -565,89 +711,55 @@ export default function MismatchEngine() {
           {/* Panel A: Attribute Mismatch Visualizer */}
           <div className="glass-card rounded-xl p-6 opacity-0 animate-fade-in" style={{ animationDelay: '300ms', animationFillMode: 'forwards' }}>
             <h3 className="text-lg font-semibold text-foreground mb-4">Attribute Mismatch Visualizer</h3>
-            <p className="text-xs text-muted-foreground mb-4">Side-by-side comparison of AI-detected vs Marketplace attributes</p>
+            <p className="text-xs text-muted-foreground mb-4">
+              {selectedSku ? `Side-by-side comparison for ${selectedSku}` : "Select a SKU to view attribute comparison"}
+            </p>
             
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div className="font-medium text-muted-foreground">AI-Detected</div>
-                <div className="font-medium text-muted-foreground">Marketplace Listing</div>
+            {!selectedSku ? (
+              <div className="text-center py-8">
+                <p className="text-sm text-muted-foreground">Click "View Details" on a SKU to see attribute comparison</p>
               </div>
-              
-              {/* Color */}
-              <div className="p-3 bg-muted/30 rounded-lg">
-                <div className="grid grid-cols-2 gap-3 items-center">
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">Color</div>
-                    <div className="text-sm font-medium text-foreground">Navy Blue</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">Color</div>
-                    <div className="text-sm font-medium text-destructive">Black</div>
-                    <XCircle className="w-3 h-3 text-destructive mt-1" />
-                  </div>
+            ) : attributeLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : attributeData ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="font-medium text-muted-foreground">AI-Detected</div>
+                  <div className="font-medium text-muted-foreground">Marketplace Listing</div>
                 </div>
+                
+                {attributeData.comparison.map((attr) => (
+                  <div key={attr.attribute} className="p-3 bg-muted/30 rounded-lg">
+                    <div className="grid grid-cols-2 gap-3 items-center">
+                      <div>
+                        <div className="text-xs text-muted-foreground mb-1">{attr.attribute}</div>
+                        <div className="text-sm font-medium text-foreground">{attr.aiDetected}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground mb-1">{attr.attribute}</div>
+                        <div className={cn(
+                          "text-sm font-medium",
+                          attr.match ? "text-foreground" : "text-destructive"
+                        )}>
+                          {attr.marketplaceListing}
+                        </div>
+                        {attr.match ? (
+                          <CheckCircle className="w-3 h-3 text-success mt-1" />
+                        ) : (
+                          <XCircle className="w-3 h-3 text-destructive mt-1" />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-
-              {/* Size */}
-              <div className="p-3 bg-muted/30 rounded-lg">
-                <div className="grid grid-cols-2 gap-3 items-center">
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">Size</div>
-                    <div className="text-sm font-medium text-foreground">M</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">Size</div>
-                    <div className="text-sm font-medium text-destructive">L</div>
-                    <XCircle className="w-3 h-3 text-destructive mt-1" />
-                  </div>
-                </div>
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-sm text-muted-foreground">No attribute data available</p>
               </div>
-
-              {/* Pattern */}
-              <div className="p-3 bg-muted/30 rounded-lg">
-                <div className="grid grid-cols-2 gap-3 items-center">
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">Pattern</div>
-                    <div className="text-sm font-medium text-foreground">Solid</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">Pattern</div>
-                    <div className="text-sm font-medium text-foreground">Solid</div>
-                    <CheckCircle className="w-3 h-3 text-success mt-1" />
-                  </div>
-                </div>
-              </div>
-
-              {/* Gender */}
-              <div className="p-3 bg-muted/30 rounded-lg">
-                <div className="grid grid-cols-2 gap-3 items-center">
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">Gender</div>
-                    <div className="text-sm font-medium text-foreground">Unisex</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">Gender</div>
-                    <div className="text-sm font-medium text-foreground">Unisex</div>
-                    <CheckCircle className="w-3 h-3 text-success mt-1" />
-                  </div>
-                </div>
-              </div>
-
-              {/* Material */}
-              <div className="p-3 bg-muted/30 rounded-lg">
-                <div className="grid grid-cols-2 gap-3 items-center">
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">Material</div>
-                    <div className="text-sm font-medium text-foreground">Cotton Blend</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">Material</div>
-                    <div className="text-sm font-medium text-foreground">Cotton Blend</div>
-                    <CheckCircle className="w-3 h-3 text-success mt-1" />
-                  </div>
-                </div>
-              </div>
-            </div>
+            )}
 
             <div className="mt-4 pt-4 border-t border-border/30">
               <Button 
@@ -668,105 +780,90 @@ export default function MismatchEngine() {
           {/* Panel B: Localization Panel */}
           <div className="glass-card rounded-xl p-6 opacity-0 animate-fade-in" style={{ animationDelay: '400ms', animationFillMode: 'forwards' }}>
             <h3 className="text-lg font-semibold text-foreground mb-4">Localization Panel</h3>
+            <p className="text-xs text-muted-foreground mb-4">
+              {selectedSku ? `Localization status for ${selectedSku}` : "Select a SKU to view localization"}
+            </p>
             
-            <div className="space-y-4">
-              {/* India Languages */}
-              <div>
-                <div className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
-                  <span>🇮🇳</span> India
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {['en', 'hi', 'ta', 'te', 'bn'].map((lang) => {
-                    const langNames: Record<string, string> = {
-                      en: 'English', hi: 'Hindi', ta: 'Tamil', te: 'Telugu', bn: 'Bengali'
+            {!selectedSku ? (
+              <div className="text-center py-8">
+                <p className="text-sm text-muted-foreground">Click "View Details" on a SKU to see localization status</p>
+              </div>
+            ) : localizationLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : localizationData ? (
+              <>
+                <div className="space-y-4">
+                  {Object.entries(localizationData.localization).map(([region, langs]) => {
+                    const regionEmojis: Record<string, string> = {
+                      india: "🇮🇳",
+                      south_africa: "🇿🇦",
+                      global: "🌍",
                     };
-                    const isMissing = tableData[0]?.localMissing?.includes(lang);
+                    const regionNames: Record<string, string> = {
+                      india: "India",
+                      south_africa: "South Africa",
+                      global: "Global",
+                    };
+                    const langNames: Record<string, string> = {
+                      en: 'English', hi: 'Hindi', ta: 'Tamil', te: 'Telugu', bn: 'Bengali',
+                      zu: 'Zulu', af: 'Afrikaans', xh: 'Xhosa',
+                      es: 'Spanish', fr: 'French', ar: 'Arabic'
+                    };
+                    
                     return (
-                      <Badge
-                        key={lang}
-                        variant={isMissing ? "destructive" : "default"}
-                        className={cn(
-                          "text-xs",
-                          isMissing && "bg-destructive/10 text-destructive"
-                        )}
-                      >
-                        {langNames[lang]}
-                        {isMissing && <XCircle className="w-3 h-3 ml-1" />}
-                        {!isMissing && <CheckCircle className="w-3 h-3 ml-1 text-success" />}
-                      </Badge>
+                      <div key={region}>
+                        <div className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
+                          <span>{regionEmojis[region] || "🌍"}</span> {regionNames[region] || region}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {Object.entries(langs).map(([lang, status]) => {
+                            const isMissing = status.status === "missing";
+                            const isPending = status.status === "pending";
+                            return (
+                              <Badge
+                                key={lang}
+                                variant={isMissing ? "destructive" : isPending ? "secondary" : "default"}
+                                className={cn(
+                                  "text-xs",
+                                  isMissing && "bg-destructive/10 text-destructive",
+                                  isPending && "bg-warning/10 text-warning"
+                                )}
+                              >
+                                {langNames[lang] || lang}
+                                {isMissing && <XCircle className="w-3 h-3 ml-1" />}
+                                {!isMissing && !isPending && <CheckCircle className="w-3 h-3 ml-1 text-success" />}
+                                {isPending && <AlertTriangle className="w-3 h-3 ml-1" />}
+                              </Badge>
+                            );
+                          })}
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
-              </div>
 
-              {/* South Africa Languages */}
-              <div>
-                <div className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
-                  <span>🇿🇦</span> South Africa
+                <div className="mt-4 pt-4 border-t border-border/30 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">Missing Translations</span>
+                    <Badge variant="destructive" className="text-xs">{localizationData.missingTranslations}</Badge>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">Incorrect Translations</span>
+                    <Badge variant="secondary" className="text-xs bg-warning/10 text-warning">{localizationData.incorrectTranslations}</Badge>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">Non-compliant Keywords</span>
+                    <Badge variant="secondary" className="text-xs bg-success/10 text-success">{localizationData.nonCompliantKeywords}</Badge>
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {['en', 'zu', 'af', 'xh'].map((lang) => {
-                    const langNames: Record<string, string> = {
-                      en: 'English', zu: 'Zulu', af: 'Afrikaans', xh: 'Xhosa'
-                    };
-                    const isMissing = tableData[2]?.localMissing?.includes(lang);
-                    return (
-                      <Badge
-                        key={lang}
-                        variant={isMissing ? "destructive" : "default"}
-                        className={cn(
-                          "text-xs",
-                          isMissing && "bg-destructive/10 text-destructive"
-                        )}
-                      >
-                        {langNames[lang]}
-                        {isMissing && <XCircle className="w-3 h-3 ml-1" />}
-                        {!isMissing && <CheckCircle className="w-3 h-3 ml-1 text-success" />}
-                      </Badge>
-                    );
-                  })}
-                </div>
+              </>
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-sm text-muted-foreground">No localization data available</p>
               </div>
-
-              {/* Global Languages */}
-              <div>
-                <div className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
-                  <span>🌍</span> Global
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {['en', 'es', 'fr', 'ar'].map((lang) => {
-                    const langNames: Record<string, string> = {
-                      en: 'English', es: 'Spanish', fr: 'French', ar: 'Arabic'
-                    };
-                    return (
-                      <Badge
-                        key={lang}
-                        variant="default"
-                        className="text-xs"
-                      >
-                        {langNames[lang]}
-                        <CheckCircle className="w-3 h-3 ml-1 text-success" />
-                      </Badge>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 pt-4 border-t border-border/30 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">Missing Translations</span>
-                <Badge variant="destructive" className="text-xs">3</Badge>
-              </div>
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">Incorrect Translations</span>
-                <Badge variant="secondary" className="text-xs bg-warning/10 text-warning">0</Badge>
-              </div>
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">Non-compliant Keywords</span>
-                <Badge variant="secondary" className="text-xs bg-success/10 text-success">0</Badge>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       </div>

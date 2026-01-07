@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { 
   MessageSquare, 
   Sparkles, 
@@ -7,42 +8,141 @@ import {
   Table,
   BarChart3,
   Download,
-  Copy
+  Copy,
+  Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/api";
 
-const exampleQueries = [
-  "Show mismatched SKUs for Amazon.in last 2 days",
-  "Which listings failed Takealot compliance?",
-  "How much photoshoot cost saved in India this month?",
-  "Generate Flipkart-ready content for this image",
-  "List SKUs with missing localized content in South Africa"
-];
+interface QueryResult {
+  sku: string;
+  marketplace: string;
+  issue: string;
+  risk: string;
+}
 
-const recentQueries = [
-  { query: "Show top 10 SKUs by revenue at risk", time: "5 min ago" },
-  { query: "Which categories have highest mismatch rate?", time: "12 min ago" },
-  { query: "List all pending translations for Hindi", time: "1 hr ago" },
-];
+interface QueryResponse {
+  success: boolean;
+  queryId: string;
+  sql: string;
+  results: QueryResult[];
+  rowCount: number;
+  executionTime: string;
+}
 
-const mockResults = [
-  { sku: 'SKU-8742', marketplace: 'Amazon.in', issue: 'Color Mismatch', risk: '₹45,000' },
-  { sku: 'SKU-3291', marketplace: 'Flipkart', issue: 'Missing Translation', risk: '₹32,000' },
-  { sku: 'SKU-1056', marketplace: 'Takealot', issue: 'Low Resolution', risk: 'R 28,000' },
-  { sku: 'SKU-7823', marketplace: 'Amazon.in', issue: 'Attribute Error', risk: '₹18,000' },
-  { sku: 'SKU-4521', marketplace: 'eBay', issue: 'Size Mismatch', risk: '$2,100' },
-];
+interface RecentQuery {
+  id: string;
+  query: string;
+  time: string;
+  timeRelative: string;
+}
 
 export default function SQLAgent() {
   const [query, setQuery] = useState('');
-  const [hasResult, setHasResult] = useState(false);
+  const [market, setMarket] = useState('india');
+
+  // Fetch example queries
+  const { data: examplesData } = useQuery<{ examples: string[] }>({
+    queryKey: ["sql-agent", "examples"],
+    queryFn: () => apiClient.get<{ examples: string[] }>("/sql-agent/examples"),
+  });
+
+  // Fetch recent queries
+  const { data: recentQueriesData, isLoading: recentQueriesLoading } = useQuery<{ queries: RecentQuery[] }>({
+    queryKey: ["sql-agent", "recent-queries"],
+    queryFn: () => apiClient.get<{ queries: RecentQuery[] }>("/sql-agent/recent-queries?limit=10"),
+  });
+
+  // Query mutation
+  const queryMutation = useMutation({
+    mutationFn: async (queryText: string) => {
+      return apiClient.post<QueryResponse>("/sql-agent/query", {
+        query: queryText,
+        market,
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Query failed",
+        description: "Failed to execute query",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Visualize mutation
+  const visualizeMutation = useMutation({
+    mutationFn: async (queryId: string) => {
+      return apiClient.post("/sql-agent/visualize", {
+        queryId,
+        chartType: "bar",
+      });
+    },
+    onSuccess: () => {
+      toast({
+        title: "Visualizing",
+        description: "Generating chart visualization...",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Visualization failed",
+        description: "Failed to generate visualization",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Export mutation
+  const exportMutation = useMutation({
+    mutationFn: async (queryId: string) => {
+      const response = await fetch(`${import.meta.env.VITE_API_URL ?? "https://api.example.com/api/v1"}/sql-agent/export/${queryId}?format=csv`, {
+        method: "GET",
+      });
+      if (!response.ok) throw new Error("Export failed");
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `query-results-${queryId}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    },
+    onSuccess: () => {
+      toast({
+        title: "Export completed",
+        description: "Data export downloaded successfully",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Export failed",
+        description: "Failed to export data",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const exampleQueries = examplesData?.examples ?? [
+    "Show mismatched SKUs for Amazon.in last 2 days",
+    "Which listings failed Takealot compliance?",
+    "How much photoshoot cost saved in India this month?",
+    "Generate Flipkart-ready content for this image",
+    "List SKUs with missing localized content in South Africa"
+  ];
+
+  const recentQueries = recentQueriesData?.queries ?? [];
+  const queryResult = queryMutation.data;
+  const hasResult = !!queryResult;
 
   const handleSubmit = () => {
     if (query.trim()) {
-      setHasResult(true);
+      queryMutation.mutate(query);
     }
   };
 
@@ -58,6 +158,15 @@ export default function SQLAgent() {
             <Sparkles className="w-3 h-3 mr-1" />
             AI Powered
           </Badge>
+          {queryResult ? (
+            <Badge variant="default" className="text-[10px] px-1.5 py-0 bg-success/20 text-success border-success/30">
+              API
+            </Badge>
+          ) : queryMutation.isError ? (
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground border-muted">
+              Demo
+            </Badge>
+          ) : null}
         </div>
         <p className="text-muted-foreground max-w-xl mx-auto">
           Ask questions about your content data in natural language. Get instant insights without writing SQL.
@@ -86,10 +195,19 @@ export default function SQLAgent() {
             <Button 
               onClick={handleSubmit}
               className="gap-2"
-              disabled={!query.trim()}
+              disabled={!query.trim() || queryMutation.isPending}
             >
-              <Sparkles className="w-4 h-4" />
-              Run Query
+              {queryMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Running...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  Run Query
+                </>
+              )}
             </Button>
           </div>
         </div>
@@ -120,31 +238,35 @@ export default function SQLAgent() {
                 <div className="flex items-center gap-2">
                   <Table className="w-4 h-4 text-primary" />
                   <span className="font-medium text-foreground">Query Results</span>
-                  <Badge variant="secondary">5 rows</Badge>
+                  <Badge variant="secondary">{queryResult.rowCount} rows</Badge>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button 
                     size="sm" 
                     variant="ghost" 
                     className="gap-1"
-                    onClick={() => toast({
-                      title: "Visualizing",
-                      description: "Generating chart visualization...",
-                    })}
+                    onClick={() => queryResult && visualizeMutation.mutate(queryResult.queryId)}
+                    disabled={visualizeMutation.isPending || !queryResult}
                   >
-                    <BarChart3 className="w-4 h-4" />
+                    {visualizeMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <BarChart3 className="w-4 h-4" />
+                    )}
                     Visualize
                   </Button>
                   <Button 
                     size="sm" 
                     variant="ghost" 
                     className="gap-1"
-                    onClick={() => toast({
-                      title: "Exporting",
-                      description: "Preparing data export...",
-                    })}
+                    onClick={() => queryResult && exportMutation.mutate(queryResult.queryId)}
+                    disabled={exportMutation.isPending || !queryResult}
                   >
-                    <Download className="w-4 h-4" />
+                    {exportMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
                     Export
                   </Button>
                 </div>
@@ -161,7 +283,7 @@ export default function SQLAgent() {
                     </tr>
                   </thead>
                   <tbody>
-                    {mockResults.map((row, i) => (
+                    {queryResult.results.map((row, i) => (
                       <tr key={i} className="border-t border-border/30">
                         <td className="p-3">
                           <code className="text-sm font-mono bg-muted px-1.5 py-0.5 rounded">
@@ -181,7 +303,10 @@ export default function SQLAgent() {
 
               <div className="p-4 bg-muted/20 border-t border-border/30">
                 <p className="text-xs text-muted-foreground">
-                  Generated SQL: <code className="bg-muted px-1 rounded">SELECT sku, marketplace, issue_type, revenue_at_risk FROM content_issues WHERE market = 'india' ORDER BY revenue_at_risk DESC LIMIT 5</code>
+                  Generated SQL: <code className="bg-muted px-1 rounded">{queryResult.sql}</code>
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Execution time: {queryResult.executionTime}
                 </p>
               </div>
             </div>
@@ -206,18 +331,28 @@ export default function SQLAgent() {
           </div>
 
           <div className="space-y-3">
-            {recentQueries.map((rq, i) => (
-              <button
-                key={i}
-                onClick={() => setQuery(rq.query)}
-                className="w-full text-left p-3 bg-muted/30 hover:bg-muted/50 rounded-lg transition-colors group"
-              >
-                <p className="text-sm text-foreground group-hover:text-primary transition-colors line-clamp-2">
-                  {rq.query}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">{rq.time}</p>
-              </button>
-            ))}
+            {recentQueriesLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : recentQueries.length > 0 ? (
+              recentQueries.map((rq) => (
+                <button
+                  key={rq.id}
+                  onClick={() => setQuery(rq.query)}
+                  className="w-full text-left p-3 bg-muted/30 hover:bg-muted/50 rounded-lg transition-colors group"
+                >
+                  <p className="text-sm text-foreground group-hover:text-primary transition-colors line-clamp-2">
+                    {rq.query}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">{rq.timeRelative || rq.time}</p>
+                </button>
+              ))
+            ) : (
+              <div className="text-center py-4 text-sm text-muted-foreground">
+                No recent queries
+              </div>
+            )}
           </div>
 
           <div className="mt-6 pt-4 border-t border-border/30">

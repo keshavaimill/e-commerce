@@ -1,5 +1,6 @@
 import { LucideIcon, TrendingUp, TrendingDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 
 interface KPICardProps {
   title: string;
@@ -9,6 +10,7 @@ interface KPICardProps {
   icon: LucideIcon;
   iconColor?: string;
   delay?: number;
+  isFromBackend?: boolean;
 }
 
 export function KPICard({ 
@@ -18,7 +20,8 @@ export function KPICard({
   changeLabel = "vs last period",
   icon: Icon,
   iconColor = "text-primary",
-  delay = 0
+  delay = 0,
+  isFromBackend = false
 }: KPICardProps) {
   const isPositive = change >= 0;
   
@@ -53,7 +56,18 @@ export function KPICard({
       </div>
       
       <div className="space-y-1">
-        <h3 className="text-2xl font-bold text-foreground">{value}</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-2xl font-bold text-foreground">{value}</h3>
+          {isFromBackend ? (
+            <Badge variant="default" className="text-[10px] px-1.5 py-0 bg-success/20 text-success border-success/30">
+              API
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground border-muted">
+              Demo
+            </Badge>
+          )}
+        </div>
         <p className="text-sm text-muted-foreground">{title}</p>
         <p className="text-xs text-muted-foreground/70">{changeLabel}</p>
       </div>

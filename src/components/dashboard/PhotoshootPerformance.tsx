@@ -1,32 +1,89 @@
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { useQuery } from "@tanstack/react-query";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+} from "recharts";
+import { apiClient } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
 
-const costData = [
-  { month: 'Jan', saved: 125000 },
-  { month: 'Feb', saved: 185000 },
-  { month: 'Mar', saved: 220000 },
-  { month: 'Apr', saved: 190000 },
-  { month: 'May', saved: 275000 },
-  { month: 'Jun', saved: 310000 },
-];
+interface CostDataPoint {
+  month: string;
+  saved: number;
+}
 
-const rejectionData = [
-  { name: 'Amazon', value: 12, color: '#b89d7f' },
-  { name: 'Flipkart', value: 8, color: '#a3825e' },
-  { name: 'Takealot', value: 5, color: '#896b4a' },
-  { name: 'eBay', value: 15, color: '#6f563b' },
-];
+interface RejectionDataPoint {
+  name: string;
+  value: number;
+  color: string;
+}
 
-const styleCards = [
-  { name: 'Lifestyle', count: 1247, trend: '+15%' },
-  { name: 'Studio', count: 892, trend: '+8%' },
-  { name: 'Flat Lay', count: 634, trend: '+22%' },
-];
+interface StyleCard {
+  name: string;
+  count: number;
+  trend: string;
+}
+
+interface PhotoshootPerformanceResponse {
+  costData: CostDataPoint[];
+  rejectionData: RejectionDataPoint[];
+  styleCards: StyleCard[];
+}
 
 export function PhotoshootPerformance() {
+  const { data, isLoading, isError } = useQuery<PhotoshootPerformanceResponse>({
+    queryKey: ["dashboard", "photoshoot-performance"],
+    queryFn: () => apiClient.get<PhotoshootPerformanceResponse>("/dashboard/photoshoot-performance"),
+  });
+
+  // Fallback dummy data
+  const dummyCostData = [
+    { month: 'Jan', saved: 125000 },
+    { month: 'Feb', saved: 185000 },
+    { month: 'Mar', saved: 220000 },
+    { month: 'Apr', saved: 190000 },
+    { month: 'May', saved: 275000 },
+    { month: 'Jun', saved: 310000 },
+  ];
+  const dummyRejectionData = [
+    { name: 'Amazon', value: 12, color: '#b89d7f' },
+    { name: 'Flipkart', value: 8, color: '#a3825e' },
+    { name: 'Takealot', value: 5, color: '#896b4a' },
+    { name: 'eBay', value: 15, color: '#6f563b' },
+  ];
+  const dummyStyleCards = [
+    { name: 'Lifestyle', count: 1247, trend: '+15%' },
+    { name: 'Studio', count: 892, trend: '+8%' },
+    { name: 'Flat Lay', count: 634, trend: '+22%' },
+  ];
+
+  const costData = data?.costData.length ? data.costData : dummyCostData;
+  const rejectionData = data?.rejectionData.length ? data.rejectionData : dummyRejectionData;
+  const styleCards = data?.styleCards.length ? data.styleCards : dummyStyleCards;
+  const isUsingDummy = isError || (!data && !isLoading);
+
   return (
     <div className="glass-card rounded-xl p-6 opacity-0 animate-fade-in" style={{ animationDelay: '300ms', animationFillMode: 'forwards' }}>
       <div className="mb-6">
-        <h3 className="text-lg font-semibold text-foreground">AI Photoshoot Performance</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-lg font-semibold text-foreground">AI Photoshoot Performance</h3>
+          {data ? (
+            <Badge variant="default" className="text-[10px] px-1.5 py-0 bg-success/20 text-success border-success/30">
+              API
+            </Badge>
+          ) : isUsingDummy ? (
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground border-muted">
+              Demo
+            </Badge>
+          ) : null}
+        </div>
         <p className="text-sm text-muted-foreground">Cost savings and efficiency metrics</p>
       </div>
 

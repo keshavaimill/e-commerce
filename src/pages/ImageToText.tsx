@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { 
   FileText, 
   Languages, 
@@ -11,7 +12,9 @@ import {
   AlertTriangle,
   Sparkles,
   ChevronDown,
-  X
+  X,
+  Loader2,
+  LucideIcon
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,16 +29,77 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/api";
 
-const kpis = [
-  { label: "Language Completeness", value: "87%", icon: Languages, change: 12 },
-  { label: "Marketplace Readiness", value: "94/100", icon: Target, change: 5 },
-  { label: "SEO Quality Score", value: "91/100", icon: Zap, change: 8 },
-  { label: "Attribute Accuracy", value: "96%", icon: CheckCircle, change: 3 },
-  { label: "Time Saved/Listing", value: "4.2min", icon: Clock, change: -22 },
-];
+interface ImageToTextKPI {
+  label: string;
+  value: string;
+  icon: string;
+  change: number;
+}
 
-const languages = [
+interface Translation {
+  code: string;
+  name: string;
+  flag: string;
+  status: "complete" | "pending" | "error";
+  title?: string | null;
+  description?: string | null;
+  bulletPoints?: string[] | null;
+}
+
+interface TranslationsResponse {
+  imageId: string;
+  translations: Translation[];
+}
+
+interface QualityCheck {
+  code: string;
+  name: string;
+  flag: string;
+  status: "complete" | "pending" | "error";
+  checks: {
+    grammar: boolean;
+    keywords: number;
+    cultural: number;
+    forbidden: boolean;
+  };
+}
+
+interface QualityCheckResponse {
+  imageId: string;
+  qualityChecks: QualityCheck[];
+}
+
+interface GenerateResponse {
+  success: boolean;
+  jobId: string;
+  title: string;
+  shortDescription: string;
+  bulletPoints: string[];
+  attributes: Array<{
+    name: string;
+    value: string;
+    confidence: number;
+  }>;
+}
+
+interface UploadResponse {
+  success: boolean;
+  imageId: string;
+  url: string;
+  filename: string;
+}
+
+const iconMap: Record<string, LucideIcon> = {
+  Languages,
+  Target,
+  Zap,
+  CheckCircle,
+  Clock,
+};
+
+const mockLanguages = [
   { code: 'en', name: 'English', flag: '🇬🇧', status: 'complete' },
   { code: 'hi', name: 'Hindi', flag: '🇮🇳', status: 'complete' },
   { code: 'ta', name: 'Tamil', flag: '🇮🇳', status: 'pending' },
@@ -49,7 +113,7 @@ const languages = [
   { code: 'ar', name: 'Arabic', flag: '🌍', status: 'pending' },
 ];
 
-const attributes = [
+const mockAttributes = [
   { name: 'Color', value: 'Navy Blue', confidence: 98 },
   { name: 'Material', value: 'Cotton Blend', confidence: 92 },
   { name: 'Gender', value: 'Unisex', confidence: 88 },
@@ -61,11 +125,126 @@ const attributes = [
 ];
 
 export default function ImageToText() {
+  const queryClient = useQueryClient();
   const [activeLanguage, setActiveLanguage] = useState('en');
   const [region, setRegion] = useState('india');
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [uploadedImageId, setUploadedImageId] = useState<string | null>(null);
+  const [generatedData, setGeneratedData] = useState<GenerateResponse | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch KPIs
+  const { data: kpisData, isLoading: kpisLoading } = useQuery<{ kpis: ImageToTextKPI[] }>({
+    queryKey: ["image-to-text", "kpis"],
+    queryFn: () => apiClient.get<{ kpis: ImageToTextKPI[] }>("/image-to-text/kpis"),
+  });
+
+  // Fetch translations
+  const { data: translationsData, isLoading: translationsLoading } = useQuery<TranslationsResponse>({
+    queryKey: ["image-to-text", "translations", uploadedImageId],
+    queryFn: () => apiClient.get<TranslationsResponse>(`/image-to-text/translations/${uploadedImageId}`),
+    enabled: !!uploadedImageId,
+  });
+
+  // Fetch quality check
+  const { data: qualityCheckData, isLoading: qualityCheckLoading } = useQuery<QualityCheckResponse>({
+    queryKey: ["image-to-text", "quality-check", uploadedImageId],
+    queryFn: () => apiClient.get<QualityCheckResponse>(`/image-to-text/quality-check/${uploadedImageId}`),
+    enabled: !!uploadedImageId,
+  });
+
+  // Upload mutation
+  const uploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      return apiClient.post<UploadResponse>("/image-to-text/upload", formData);
+    },
+    onSuccess: (data) => {
+      setUploadedImageId(data.imageId);
+      setUploadedImage(data.url);
+      setUploadedFileName(data.filename);
+      toast({
+        title: "Image uploaded",
+        description: `Successfully uploaded ${data.filename}`,
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Upload error",
+        description: "Failed to upload image",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Generate mutation
+  const generateMutation = useMutation({
+    mutationFn: async () => {
+      if (!uploadedImageId) throw new Error("No image uploaded");
+      return apiClient.post<GenerateResponse>("/image-to-text/generate", {
+        imageId: uploadedImageId,
+        region,
+        language: activeLanguage,
+        marketplace: region === "india" ? "Amazon.in" : region === "south_africa" ? "Takealot" : "Amazon.com",
+      });
+    },
+    onSuccess: (data) => {
+      setGeneratedData(data);
+      queryClient.invalidateQueries({ queryKey: ["image-to-text", "translations", uploadedImageId] });
+      queryClient.invalidateQueries({ queryKey: ["image-to-text", "quality-check", uploadedImageId] });
+      toast({
+        title: "Description generated",
+        description: "AI has analyzed your image and generated content",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Generation failed",
+        description: "Failed to generate description",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Approve mutation
+  const approveMutation = useMutation({
+    mutationFn: async (languages?: string[]) => {
+      if (!uploadedImageId) throw new Error("No image uploaded");
+      return apiClient.post<{ success: boolean; approved: number; message: string }>("/image-to-text/approve", {
+        imageId: uploadedImageId,
+        languages,
+      });
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Approved",
+        description: data.message,
+      });
+      queryClient.invalidateQueries({ queryKey: ["image-to-text"] });
+    },
+    onError: () => {
+      toast({
+        title: "Approval failed",
+        description: "Failed to approve translations",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Fallback dummy KPIs
+  const dummyKpis: ImageToTextKPI[] = [
+    { label: "Language Completeness", value: "87%", icon: "Languages", change: 12 },
+    { label: "Marketplace Readiness", value: "94/100", icon: "Target", change: 5 },
+    { label: "SEO Quality Score", value: "91/100", icon: "Zap", change: 8 },
+    { label: "Attribute Accuracy", value: "96%", icon: "CheckCircle", change: 3 },
+    { label: "Time Saved/Listing", value: "4.2min", icon: "Clock", change: -22 },
+  ];
+
+  const kpis = kpisData?.kpis.length ? kpisData.kpis : dummyKpis;
+  const languages = translationsData?.translations.length ? translationsData.translations : mockLanguages;
+  const attributes = generatedData?.attributes.length ? generatedData.attributes : mockAttributes;
 
   const handleCopy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -107,19 +286,11 @@ export default function ImageToText() {
       reader.onloadend = () => {
         setUploadedImage(reader.result as string);
         setUploadedFileName(file.name);
-        toast({
-          title: "Image uploaded",
-          description: `Successfully uploaded ${file.name}`,
-        });
-      };
-      reader.onerror = () => {
-        toast({
-          title: "Upload error",
-          description: "Failed to read the image file",
-          variant: "destructive",
-        });
       };
       reader.readAsDataURL(file);
+
+      // Upload to backend
+      uploadMutation.mutate(file);
     }
   };
 
@@ -140,12 +311,11 @@ export default function ImageToText() {
       reader.onloadend = () => {
         setUploadedImage(reader.result as string);
         setUploadedFileName(file.name);
-        toast({
-          title: "Image uploaded",
-          description: `Successfully uploaded ${file.name}`,
-        });
       };
       reader.readAsDataURL(file);
+
+      // Upload to backend
+      uploadMutation.mutate(file);
     } else {
       toast({
         title: "Invalid file",
@@ -162,6 +332,8 @@ export default function ImageToText() {
   const handleRemoveImage = () => {
     setUploadedImage(null);
     setUploadedFileName(null);
+    setUploadedImageId(null);
+    setGeneratedData(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -172,7 +344,7 @@ export default function ImageToText() {
   };
 
   const handleGenerate = () => {
-    if (!uploadedImage) {
+    if (!uploadedImageId) {
       toast({
         title: "Upload image",
         description: "Please upload a product image first",
@@ -180,17 +352,11 @@ export default function ImageToText() {
       });
       return;
     }
-    toast({
-      title: "Generating description",
-      description: "AI is analyzing your image...",
-    });
+    generateMutation.mutate();
   };
 
   const handleApproveAll = () => {
-    toast({
-      title: "Approved",
-      description: "All translations have been approved",
-    });
+    approveMutation.mutate();
   };
 
   const handleEditSelected = () => {
@@ -212,6 +378,15 @@ export default function ImageToText() {
             <Sparkles className="w-3 h-3 mr-1" />
             AI Powered
           </Badge>
+          {kpisData ? (
+            <Badge variant="default" className="text-[10px] px-1.5 py-0 bg-success/20 text-success border-success/30">
+              API
+            </Badge>
+          ) : kpisLoading ? null : (
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground border-muted">
+              Demo
+            </Badge>
+          )}
         </div>
         <p className="text-muted-foreground">
           Generate marketplace-ready product descriptions from images with multi-language support
@@ -220,8 +395,17 @@ export default function ImageToText() {
 
       {/* KPI Row */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        {kpis.map((kpi, index) => {
-          const Icon = kpi.icon;
+        {kpisLoading ? (
+          Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="glass-card rounded-xl p-4">
+              <div className="flex items-center justify-center h-20">
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
+            </div>
+          ))
+        ) : (
+          kpis.map((kpi, index) => {
+            const Icon = iconMap[kpi.icon] || Languages;
           return (
             <div 
               key={kpi.label}
@@ -234,19 +418,31 @@ export default function ImageToText() {
               </div>
               <div className="flex items-baseline gap-2">
                 <span className="text-xl font-bold text-foreground">{kpi.value}</span>
-                <Badge 
-                  variant="secondary" 
-                  className={cn(
-                    "text-xs",
-                    kpi.change > 0 ? "text-success" : "text-destructive"
+                <div className="flex items-center gap-1">
+                  <Badge 
+                    variant="secondary" 
+                    className={cn(
+                      "text-xs",
+                      kpi.change > 0 ? "text-success" : "text-destructive"
+                    )}
+                  >
+                    {kpi.change > 0 ? '+' : ''}{kpi.change}%
+                  </Badge>
+                  {kpisData ? (
+                    <Badge variant="default" className="text-[8px] px-1 py-0 bg-success/20 text-success border-success/30">
+                      API
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[8px] px-1 py-0 text-muted-foreground border-muted">
+                      Demo
+                    </Badge>
                   )}
-                >
-                  {kpi.change > 0 ? '+' : ''}{kpi.change}%
-                </Badge>
+                </div>
               </div>
             </div>
           );
-        })}
+          })
+        )}
       </div>
 
       {/* Main Content */}
@@ -270,7 +466,12 @@ export default function ImageToText() {
             onDragOver={handleDragOver}
             onClick={!uploadedImage ? handleBrowse : undefined}
           >
-            {uploadedImage ? (
+            {uploadMutation.isPending ? (
+              <div className="flex items-center justify-center h-full">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                <span className="ml-2 text-sm text-muted-foreground">Uploading...</span>
+              </div>
+            ) : uploadedImage ? (
               <div className="relative w-full h-full group">
                 <img 
                   src={uploadedImage} 
@@ -310,9 +511,23 @@ export default function ImageToText() {
             )}
           </div>
 
-          <Button className="w-full gap-2 mb-6" size="lg" onClick={handleGenerate}>
-            <Sparkles className="w-4 h-4" />
-            Generate Description
+          <Button 
+            className="w-full gap-2 mb-6" 
+            size="lg" 
+            onClick={handleGenerate}
+            disabled={generateMutation.isPending || !uploadedImageId}
+          >
+            {generateMutation.isPending ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Generating...
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-4 h-4" />
+                Generate Description
+              </>
+            )}
           </Button>
 
           {/* Generated Content */}
@@ -331,7 +546,7 @@ export default function ImageToText() {
                 </Button>
               </div>
               <div className="p-3 bg-muted/50 rounded-lg text-sm text-foreground">
-                Premium Cotton Blend Unisex T-Shirt - Navy Blue | Comfortable Casual Wear
+                {generatedData?.title || "Premium Cotton Blend Unisex T-Shirt - Navy Blue | Comfortable Casual Wear"}
               </div>
             </div>
 
@@ -350,7 +565,8 @@ export default function ImageToText() {
               </div>
               <Textarea 
                 className="min-h-[80px] resize-none bg-muted/50"
-                defaultValue="Elevate your everyday style with this premium cotton blend t-shirt. Features a classic fit, breathable fabric, and versatile navy blue color perfect for any casual occasion."
+                value={generatedData?.shortDescription || "Elevate your everyday style with this premium cotton blend t-shirt. Features a classic fit, breathable fabric, and versatile navy blue color perfect for any casual occasion."}
+                readOnly
               />
             </div>
 
@@ -359,13 +575,13 @@ export default function ImageToText() {
                 <label className="text-sm font-medium text-foreground">Bullet Points</label>
               </div>
               <ul className="space-y-2">
-                {[
+                {(generatedData?.bulletPoints || [
                   'Premium cotton-polyester blend for ultimate comfort',
                   'Classic unisex fit suitable for all body types',
                   'Easy care - machine washable',
                   'Available in sizes S to XXL',
                   'Perfect for casual and semi-formal occasions'
-                ].map((point, i) => (
+                ]).map((point, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm">
                     <span className="text-primary mt-1">•</span>
                     <span className="text-foreground">{point}</span>
@@ -424,36 +640,42 @@ export default function ImageToText() {
             </div>
             
             <div className="space-y-3">
-              {attributes.map((attr) => (
-                <div 
-                  key={attr.name}
-                  className="flex items-center gap-4 p-3 bg-muted/30 rounded-lg"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-foreground">{attr.name}</div>
-                    <div className="text-sm text-muted-foreground">{attr.value}</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-20 h-2 bg-muted rounded-full overflow-hidden">
-                      <div 
-                        className={cn(
-                          "h-full rounded-full",
-                          attr.confidence >= 90 ? "bg-success" :
-                          attr.confidence >= 80 ? "bg-warning" : "bg-destructive"
-                        )}
-                        style={{ width: `${attr.confidence}%` }}
-                      />
+              {attributes.length > 0 ? (
+                attributes.map((attr) => (
+                  <div 
+                    key={attr.name}
+                    className="flex items-center gap-4 p-3 bg-muted/30 rounded-lg"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-foreground">{attr.name}</div>
+                      <div className="text-sm text-muted-foreground">{attr.value}</div>
                     </div>
-                    <span className={cn(
-                      "text-sm font-medium w-10 text-right",
-                      attr.confidence >= 90 ? "text-success" :
-                      attr.confidence >= 80 ? "text-warning" : "text-destructive"
-                    )}>
-                      {attr.confidence}%
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-20 h-2 bg-muted rounded-full overflow-hidden">
+                        <div 
+                          className={cn(
+                            "h-full rounded-full",
+                            attr.confidence >= 90 ? "bg-success" :
+                            attr.confidence >= 80 ? "bg-warning" : "bg-destructive"
+                          )}
+                          style={{ width: `${attr.confidence}%` }}
+                        />
+                      </div>
+                      <span className={cn(
+                        "text-sm font-medium w-10 text-right",
+                        attr.confidence >= 90 ? "text-success" :
+                        attr.confidence >= 80 ? "text-warning" : "text-destructive"
+                      )}>
+                        {attr.confidence}%
+                      </span>
+                    </div>
                   </div>
+                ))
+              ) : (
+                <div className="text-center py-4 text-sm text-muted-foreground">
+                  Generate description to see attributes
                 </div>
-              ))}
+              )}
             </div>
           </div>
 
@@ -462,7 +684,11 @@ export default function ImageToText() {
             <h3 className="text-lg font-semibold text-foreground mb-4">Localization Quality Check</h3>
             
             <div className="space-y-4 max-h-[400px] overflow-y-auto">
-              {languages.map((lang) => (
+              {translationsLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                </div>
+              ) : languages.length > 0 ? languages.map((lang) => (
                 <div 
                   key={lang.code}
                   className="p-4 bg-muted/30 rounded-lg"
@@ -505,11 +731,25 @@ export default function ImageToText() {
                     </div>
                   </div>
                 </div>
-              ))}
+              )) : (
+                <div className="text-center py-8 text-sm text-muted-foreground">
+                  Generate description to see quality checks
+                </div>
+              )}
             </div>
 
             <div className="flex gap-2 mt-4">
-              <Button className="flex-1" onClick={handleApproveAll}>Approve All</Button>
+              <Button 
+                className="flex-1" 
+                onClick={handleApproveAll}
+                disabled={approveMutation.isPending || !uploadedImageId}
+              >
+                {approveMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  "Approve All"
+                )}
+              </Button>
               <Button variant="outline" className="flex-1" onClick={handleEditSelected}>Edit Selected</Button>
             </div>
           </div>

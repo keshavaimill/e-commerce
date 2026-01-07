@@ -1,4 +1,5 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { 
   Camera, 
   Clock, 
@@ -10,23 +11,100 @@ import {
   RefreshCw,
   ArrowRight,
   Sparkles,
-  X
+  X,
+  Loader2,
+  LucideIcon
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
+import { apiClient } from "@/lib/api";
 
-const kpis = [
-  { label: "Photos Generated Today", value: "1,847", icon: Camera, change: 12 },
-  { label: "Avg Rendering Time", value: "4.2s", icon: Clock, change: -18 },
-  { label: "Cost Saved Today", value: "₹2.8L", icon: DollarSign, change: 24 },
-  { label: "Approval Rate", value: "94%", icon: CheckCircle, change: 3 },
-  { label: "Diversity Score", value: "87/100", icon: Users, change: 5 },
-];
+interface PhotoshootKPI {
+  label: string;
+  value: string;
+  icon: string;
+  change: number;
+}
 
-const templates = {
+interface PhotoshootTemplate {
+  id: number;
+  name: string;
+  uses: number;
+  image: string;
+  previewUrl?: string;
+}
+
+interface PhotoshootTemplatesResponse {
+  indian: PhotoshootTemplate[];
+  southAfrican: PhotoshootTemplate[];
+  global: PhotoshootTemplate[];
+}
+
+interface UploadResponse {
+  success: boolean;
+  imageId: string;
+  url: string;
+  filename: string;
+  size: number;
+  dimensions?: {
+    width: number;
+    height: number;
+  };
+}
+
+interface GenerateResponse {
+  success: boolean;
+  jobId: string;
+  estimatedTime: string;
+  statusUrl: string;
+}
+
+interface PhotoshootStatus {
+  jobId: string;
+  status: "processing" | "completed" | "failed";
+  progress: number;
+  result?: {
+    generatedImages: Array<{
+      id: string;
+      url: string;
+      template: string;
+      marketplace: string;
+    }>;
+  };
+  error?: string | null;
+}
+
+interface CostAnalysisResponse {
+  regionSavings: Array<{
+    region: string;
+    saved: string;
+    amount: number;
+    percent: number;
+  }>;
+  timeToPublish: {
+    before: number;
+    after: number;
+    unit: string;
+  };
+  categoryBreakdown: Array<{
+    cat: string;
+    percent: number;
+    color: string;
+  }>;
+}
+
+const iconMap: Record<string, LucideIcon> = {
+  Camera,
+  Clock,
+  DollarSign,
+  CheckCircle,
+  Users,
+};
+
+const mockTemplates = {
   indian: [
     { id: 1, name: "Saree Elegance", uses: 4521, image: "Traditional saree pose" },
     { id: 2, name: "Kurta Classic", uses: 3892, image: "Modern kurta style" },
@@ -48,13 +126,145 @@ const templates = {
 };
 
 export default function AIPhotoshoot() {
+  const queryClient = useQueryClient();
   const [selectedTemplate, setSelectedTemplate] = useState<number | null>(null);
-  const [activeRegion, setActiveRegion] = useState("indian");
+  const [activeRegion, setActiveRegion] = useState<"indian" | "southAfrican" | "global">("indian");
   const [selectedSkinTone, setSelectedSkinTone] = useState<string | null>(null);
   const [selectedMarketplace, setSelectedMarketplace] = useState<Set<string>>(new Set());
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [uploadedImageId, setUploadedImageId] = useState<string | null>(null);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch KPIs
+  const { data: kpisData, isLoading: kpisLoading } = useQuery<{ kpis: PhotoshootKPI[] }>({
+    queryKey: ["photoshoot", "kpis"],
+    queryFn: () => apiClient.get<{ kpis: PhotoshootKPI[] }>("/photoshoot/kpis"),
+  });
+
+  // Fetch templates
+  const { data: templatesData, isLoading: templatesLoading } = useQuery<PhotoshootTemplatesResponse>({
+    queryKey: ["photoshoot", "templates", activeRegion],
+    queryFn: () => apiClient.get<PhotoshootTemplatesResponse>(`/photoshoot/templates?region=${activeRegion}`),
+  });
+
+  // Fetch cost analysis
+  const { data: costAnalysisData, isLoading: costAnalysisLoading } = useQuery<CostAnalysisResponse>({
+    queryKey: ["photoshoot", "cost-analysis"],
+    queryFn: () => apiClient.get<CostAnalysisResponse>("/photoshoot/cost-analysis?period=month"),
+  });
+
+  // Poll for photoshoot status
+  const { data: statusData } = useQuery<PhotoshootStatus>({
+    queryKey: ["photoshoot", "status", currentJobId],
+    queryFn: () => apiClient.get<PhotoshootStatus>(`/photoshoot/status/${currentJobId}`),
+    enabled: !!currentJobId,
+    refetchInterval: (data) => {
+      if (data?.status === "processing") return 2000; // Poll every 2 seconds
+      return false;
+    },
+  });
+
+  // Update generated image when status completes
+  useEffect(() => {
+    if (statusData?.status === "completed" && statusData.result?.generatedImages?.[0]) {
+      setGeneratedImageUrl(statusData.result.generatedImages[0].url);
+    }
+  }, [statusData]);
+
+  // Upload mutation
+  const uploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      return apiClient.post<UploadResponse>("/photoshoot/upload", formData);
+    },
+    onSuccess: (data) => {
+      setUploadedImageId(data.imageId);
+      setUploadedImage(data.url);
+      setUploadedFileName(data.filename);
+      toast({
+        title: "Image uploaded",
+        description: `Successfully uploaded ${data.filename}`,
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Upload error",
+        description: "Failed to upload image",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Generate mutation
+  const generateMutation = useMutation({
+    mutationFn: async () => {
+      if (!uploadedImageId || !selectedTemplate) throw new Error("Missing required fields");
+      return apiClient.post<GenerateResponse>("/photoshoot/generate", {
+        imageId: uploadedImageId,
+        templateId: selectedTemplate,
+        skinTone: selectedSkinTone,
+        region: activeRegion,
+        marketplaces: Array.from(selectedMarketplace),
+      });
+    },
+    onSuccess: (data) => {
+      setCurrentJobId(data.jobId);
+      toast({
+        title: "Generating photoshoot",
+        description: `AI is creating your product photoshoot... Estimated time: ${data.estimatedTime}`,
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Generation failed",
+        description: "Failed to start photoshoot generation",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Regenerate mutation
+  const regenerateMutation = useMutation({
+    mutationFn: async () => {
+      if (!uploadedImageId || !selectedTemplate) throw new Error("Missing required fields");
+      return apiClient.post<GenerateResponse>("/photoshoot/regenerate", {
+        imageId: uploadedImageId,
+        templateId: selectedTemplate,
+        skinTone: selectedSkinTone,
+        previousJobId: currentJobId,
+      });
+    },
+    onSuccess: (data) => {
+      setCurrentJobId(data.jobId);
+      toast({
+        title: "Regenerating",
+        description: "Creating a new variation...",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Regeneration failed",
+        description: "Failed to regenerate photoshoot",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Fallback dummy KPIs
+  const dummyKpis: PhotoshootKPI[] = [
+    { label: "Photos Generated Today", value: "1,847", icon: "Camera", change: 12 },
+    { label: "Avg Rendering Time", value: "4.2s", icon: "Clock", change: -18 },
+    { label: "Cost Saved Today", value: "₹2.8L", icon: "DollarSign", change: 24 },
+    { label: "Approval Rate", value: "94%", icon: "CheckCircle", change: 3 },
+    { label: "Diversity Score", value: "87/100", icon: "Users", change: 5 },
+  ];
+
+  const kpis = kpisData?.kpis.length ? kpisData.kpis : dummyKpis;
+  const templates = templatesData && Object.keys(templatesData).length > 0 ? templatesData : mockTemplates;
 
   const handleBrowseFiles = () => {
     fileInputRef.current?.click();
@@ -88,19 +298,11 @@ export default function AIPhotoshoot() {
       reader.onloadend = () => {
         setUploadedImage(reader.result as string);
         setUploadedFileName(file.name);
-        toast({
-          title: "Image uploaded",
-          description: `Successfully uploaded ${file.name}`,
-        });
-      };
-      reader.onerror = () => {
-        toast({
-          title: "Upload error",
-          description: "Failed to read the image file",
-          variant: "destructive",
-        });
       };
       reader.readAsDataURL(file);
+
+      // Upload to backend
+      uploadMutation.mutate(file);
     }
   };
 
@@ -121,12 +323,11 @@ export default function AIPhotoshoot() {
       reader.onloadend = () => {
         setUploadedImage(reader.result as string);
         setUploadedFileName(file.name);
-        toast({
-          title: "Image uploaded",
-          description: `Successfully uploaded ${file.name}`,
-        });
       };
       reader.readAsDataURL(file);
+
+      // Upload to backend
+      uploadMutation.mutate(file);
     } else {
       toast({
         title: "Invalid file",
@@ -143,6 +344,9 @@ export default function AIPhotoshoot() {
   const handleRemoveImage = () => {
     setUploadedImage(null);
     setUploadedFileName(null);
+    setUploadedImageId(null);
+    setGeneratedImageUrl(null);
+    setCurrentJobId(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -153,7 +357,7 @@ export default function AIPhotoshoot() {
   };
 
   const handleGeneratePhotoshoot = () => {
-    if (!uploadedImage) {
+    if (!uploadedImageId) {
       toast({
         title: "Upload image",
         description: "Please upload a product image first",
@@ -169,14 +373,11 @@ export default function AIPhotoshoot() {
       });
       return;
     }
-    toast({
-      title: "Generating photoshoot",
-      description: "AI is creating your product photoshoot...",
-    });
+    generateMutation.mutate();
   };
 
   const handleRegenerate = () => {
-    if (!uploadedImage) {
+    if (!uploadedImageId) {
       toast({
         title: "Upload image",
         description: "Please upload an image first",
@@ -184,32 +385,44 @@ export default function AIPhotoshoot() {
       });
       return;
     }
-    toast({
-      title: "Regenerating",
-      description: "Creating a new variation...",
-    });
+    regenerateMutation.mutate();
   };
 
-  const handleDownload = () => {
-    if (!uploadedImage) {
+  const handleDownload = async () => {
+    if (!generatedImageUrl && !uploadedImage) {
       toast({
         title: "No image to download",
-        description: "Please upload an image first",
+        description: "Please generate or upload an image first",
         variant: "destructive",
       });
       return;
     }
-    // Create a download link
-    const link = document.createElement('a');
-    link.href = uploadedImage;
-    link.download = uploadedFileName || 'photoshoot-image.png';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    toast({
-      title: "Downloading",
-      description: "Image download started",
-    });
+    
+    const imageUrl = generatedImageUrl || uploadedImage;
+    if (!imageUrl) return;
+
+    try {
+      const response = await fetch(imageUrl);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = uploadedFileName || 'photoshoot-image.png';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast({
+        title: "Downloading",
+        description: "Image download started",
+      });
+    } catch (error) {
+      toast({
+        title: "Download failed",
+        description: "Failed to download image",
+        variant: "destructive",
+      });
+    }
   };
 
   const toggleMarketplace = (mp: string) => {
@@ -234,6 +447,15 @@ export default function AIPhotoshoot() {
             <Sparkles className="w-3 h-3 mr-1" />
             AI Powered
           </Badge>
+          {kpisData ? (
+            <Badge variant="default" className="text-[10px] px-1.5 py-0 bg-success/20 text-success border-success/30">
+              API
+            </Badge>
+          ) : kpisLoading ? null : (
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground border-muted">
+              Demo
+            </Badge>
+          )}
         </div>
         <p className="text-muted-foreground">
           Generate professional product imagery with AI models for every marketplace
@@ -242,8 +464,17 @@ export default function AIPhotoshoot() {
 
       {/* KPI Row */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        {kpis.map((kpi, index) => {
-          const Icon = kpi.icon;
+        {kpisLoading ? (
+          Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="glass-card rounded-xl p-4">
+              <div className="flex items-center justify-center h-20">
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
+            </div>
+          ))
+        ) : (
+          kpis.map((kpi, index) => {
+            const Icon = iconMap[kpi.icon] || Camera;
           return (
             <div 
               key={kpi.label}
@@ -256,19 +487,31 @@ export default function AIPhotoshoot() {
               </div>
               <div className="flex items-baseline gap-2">
                 <span className="text-xl font-bold text-foreground">{kpi.value}</span>
-                <Badge 
-                  variant="secondary" 
-                  className={cn(
-                    "text-xs",
-                    kpi.change > 0 ? "text-success" : "text-destructive"
+                <div className="flex items-center gap-1">
+                  <Badge 
+                    variant="secondary" 
+                    className={cn(
+                      "text-xs",
+                      kpi.change > 0 ? "text-success" : "text-destructive"
+                    )}
+                  >
+                    {kpi.change > 0 ? '+' : ''}{kpi.change}%
+                  </Badge>
+                  {kpisData ? (
+                    <Badge variant="default" className="text-[8px] px-1 py-0 bg-success/20 text-success border-success/30">
+                      API
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[8px] px-1 py-0 text-muted-foreground border-muted">
+                      Demo
+                    </Badge>
                   )}
-                >
-                  {kpi.change > 0 ? '+' : ''}{kpi.change}%
-                </Badge>
+                </div>
               </div>
             </div>
           );
-        })}
+          })
+        )}
       </div>
 
       {/* Main Content */}
@@ -284,10 +527,15 @@ export default function AIPhotoshoot() {
               <TabsTrigger value="global">🌍 Global</TabsTrigger>
             </TabsList>
 
-            {Object.entries(templates).map(([region, items]) => (
-              <TabsContent key={region} value={region} className="mt-0">
-                <div className="grid grid-cols-2 gap-3">
-                  {items.map((template) => (
+            {templatesLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              Object.entries(templates).map(([region, items]) => (
+                <TabsContent key={region} value={region} className="mt-0">
+                  <div className="grid grid-cols-2 gap-3">
+                    {items.map((template) => (
                     <div
                       key={template.id}
                       onClick={() => setSelectedTemplate(template.id)}
@@ -310,10 +558,11 @@ export default function AIPhotoshoot() {
                         </Badge>
                       </div>
                     </div>
-                  ))}
-                </div>
-              </TabsContent>
-            ))}
+                    ))}
+                  </div>
+                </TabsContent>
+              ))
+            )}
           </Tabs>
 
           {/* Skin Tone Selector */}
@@ -359,7 +608,40 @@ export default function AIPhotoshoot() {
             onDragOver={handleDragOver}
             onClick={!uploadedImage ? handleBrowseFiles : undefined}
           >
-            {uploadedImage ? (
+            {uploadMutation.isPending ? (
+              <div className="flex items-center justify-center h-full">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                <span className="ml-2 text-sm text-muted-foreground">Uploading...</span>
+              </div>
+            ) : generatedImageUrl ? (
+              <div className="relative w-full h-full group">
+                <img 
+                  src={generatedImageUrl} 
+                  alt="Generated photoshoot" 
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                  <Button
+                    variant="destructive"
+                    size="icon"
+                    className="opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRemoveImage();
+                    }}
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+                {uploadedFileName && (
+                  <div className="absolute bottom-2 left-2 right-2">
+                    <div className="bg-black/70 text-white text-xs px-2 py-1 rounded truncate">
+                      {uploadedFileName}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : uploadedImage ? (
               <div className="relative w-full h-full group">
                 <img 
                   src={uploadedImage} 
@@ -405,18 +687,46 @@ export default function AIPhotoshoot() {
               <ArrowRight className="w-4 h-4" />
               <span className="text-foreground font-medium">AI Generated</span>
             </div>
-            <Button size="sm" variant="ghost" className="gap-1" onClick={handleRegenerate}>
-              <RefreshCw className="w-4 h-4" />
+            <Button 
+              size="sm" 
+              variant="ghost" 
+              className="gap-1" 
+              onClick={handleRegenerate}
+              disabled={regenerateMutation.isPending || !uploadedImageId}
+            >
+              {regenerateMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
               Regenerate
             </Button>
           </div>
 
           <div className="flex gap-2">
-            <Button className="flex-1 gap-2" onClick={handleGeneratePhotoshoot}>
-              <Sparkles className="w-4 h-4" />
-              Generate Photoshoot
+            <Button 
+              className="flex-1 gap-2" 
+              onClick={handleGeneratePhotoshoot}
+              disabled={generateMutation.isPending || !uploadedImageId || !selectedTemplate}
+            >
+              {generateMutation.isPending || (statusData?.status === "processing") ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  {statusData?.progress ? `Generating ${statusData.progress}%` : "Generating..."}
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  Generate Photoshoot
+                </>
+              )}
             </Button>
-            <Button variant="outline" size="icon" onClick={handleDownload}>
+            <Button 
+              variant="outline" 
+              size="icon" 
+              onClick={handleDownload}
+              disabled={!generatedImageUrl && !uploadedImage}
+            >
               <Download className="w-4 h-4" />
             </Button>
           </div>
@@ -448,11 +758,12 @@ export default function AIPhotoshoot() {
           <div className="p-4 bg-success/5 rounded-xl">
             <h4 className="text-sm font-medium text-foreground mb-2">Cost Savings by Region</h4>
             <div className="space-y-3">
-              {[
-                { region: 'India', saved: '₹12.5L', percent: 78 },
-                { region: 'South Africa', saved: 'R 892K', percent: 65 },
-                { region: 'Global', saved: '$45K', percent: 82 }
-              ].map((item) => (
+              {costAnalysisLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                </div>
+              ) : costAnalysisData ? (
+                costAnalysisData.regionSavings.map((item) => (
                 <div key={item.region}>
                   <div className="flex justify-between text-sm mb-1">
                     <span className="text-muted-foreground">{item.region}</span>
@@ -465,51 +776,59 @@ export default function AIPhotoshoot() {
                     />
                   </div>
                 </div>
-              ))}
+                ))
+              ) : null}
             </div>
           </div>
 
           <div className="p-4 bg-info/5 rounded-xl">
             <h4 className="text-sm font-medium text-foreground mb-2">Time to Publish</h4>
-            <div className="flex items-end gap-4 h-32">
-              <div className="flex-1 flex flex-col items-center">
-                <div className="flex-1 w-full bg-muted rounded-t-lg relative">
-                  <div 
-                    className="absolute bottom-0 w-full bg-muted-foreground/30 rounded-t-lg"
-                    style={{ height: '80%' }}
-                  />
+            {costAnalysisData ? (
+              <div className="flex items-end gap-4 h-32">
+                <div className="flex-1 flex flex-col items-center">
+                  <div className="flex-1 w-full bg-muted rounded-t-lg relative">
+                    <div 
+                      className="absolute bottom-0 w-full bg-muted-foreground/30 rounded-t-lg"
+                      style={{ height: '80%' }}
+                    />
+                  </div>
+                  <span className="text-xs text-muted-foreground mt-2">Before</span>
+                  <span className="text-sm font-medium">{costAnalysisData.timeToPublish.before} {costAnalysisData.timeToPublish.unit}</span>
                 </div>
-                <span className="text-xs text-muted-foreground mt-2">Before</span>
-                <span className="text-sm font-medium">48 hrs</span>
-              </div>
-              <div className="flex-1 flex flex-col items-center">
-                <div className="flex-1 w-full bg-muted rounded-t-lg relative">
-                  <div 
-                    className="absolute bottom-0 w-full bg-info rounded-t-lg"
-                    style={{ height: '25%' }}
-                  />
+                <div className="flex-1 flex flex-col items-center">
+                  <div className="flex-1 w-full bg-muted rounded-t-lg relative">
+                    <div 
+                      className="absolute bottom-0 w-full bg-info rounded-t-lg"
+                      style={{ height: `${(costAnalysisData.timeToPublish.after / costAnalysisData.timeToPublish.before) * 100}%` }}
+                    />
+                  </div>
+                  <span className="text-xs text-muted-foreground mt-2">After AI</span>
+                  <span className="text-sm font-medium text-info">{costAnalysisData.timeToPublish.after} {costAnalysisData.timeToPublish.unit}</span>
                 </div>
-                <span className="text-xs text-muted-foreground mt-2">After AI</span>
-                <span className="text-sm font-medium text-info">12 hrs</span>
               </div>
-            </div>
+            ) : (
+              <div className="flex items-center justify-center h-32">
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
+            )}
           </div>
 
           <div className="p-4 bg-primary/5 rounded-xl">
             <h4 className="text-sm font-medium text-foreground mb-2">Category Breakdown</h4>
             <div className="space-y-2">
-              {[
-                { cat: 'Fashion', percent: 45, color: 'bg-sand-500' },
-                { cat: 'Beauty', percent: 25, color: 'bg-sand-400' },
-                { cat: 'Home', percent: 20, color: 'bg-sand-300' },
-                { cat: 'Other', percent: 10, color: 'bg-sand-200' }
-              ].map((item) => (
+              {costAnalysisData ? (
+                costAnalysisData.categoryBreakdown.map((item) => (
                 <div key={item.cat} className="flex items-center gap-2">
                   <div className={cn("w-3 h-3 rounded", item.color)} />
                   <span className="text-sm text-muted-foreground flex-1">{item.cat}</span>
                   <span className="text-sm font-medium">{item.percent}%</span>
                 </div>
-              ))}
+                ))
+              ) : (
+                <div className="flex items-center justify-center py-4">
+                  <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                </div>
+              )}
             </div>
           </div>
         </div>
