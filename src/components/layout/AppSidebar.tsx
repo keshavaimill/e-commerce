@@ -59,6 +59,12 @@ const toolsItems = [
     icon: MessageSquare,
     description: "Natural language queries"
   },
+  { 
+    title: "Virtual Try-On", 
+    url: "/virtual-tryon", 
+    icon: Camera,
+    description: "Virtual try-on with AI"
+  },
 ];
 
 const settingsItems = [

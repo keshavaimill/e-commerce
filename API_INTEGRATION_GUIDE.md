@@ -42,9 +42,12 @@ Create a `.env` file in the project root:
 
 ```env
 VITE_API_URL=https://your-backend-api.com/api/v1
+VITE_VTO_API_URL=http://127.0.0.1:8000
 ```
 
-**Note:** The API client defaults to `https://api.example.com/api/v1` if `VITE_API_URL` is not set.
+**Note:** 
+- The API client defaults to `https://api.example.com/api/v1` if `VITE_API_URL` is not set.
+- The Virtual Try-On API client defaults to `http://127.0.0.1:8000` if `VITE_VTO_API_URL` is not set.
 
 ### 2. React Query Provider
 
