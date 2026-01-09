@@ -2,11 +2,13 @@ import os
 import io
 import logging
 from typing import Optional
+
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.responses import Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from dotenv import load_dotenv
+
 from google import genai
 from google.genai import types
 
@@ -20,30 +22,43 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VTO-Engine")
 
+# --- Gemini Configuration (SAFE) ---
 API_KEY = os.getenv("GEMINI_API_KEY")
-if not API_KEY:
-    logger.error("GEMINI_API_KEY missing from environment.")
-    raise RuntimeError("GEMINI_API_KEY not found.")
 
-client = genai.Client(api_key=API_KEY)
-app = FastAPI(title="Gemini 3 Virtual Try-On API")
+if not API_KEY:
+    logger.warning("GEMINI_API_KEY not set. Gemini features will be disabled.")
+
+client = None
+if API_KEY:
+    try:
+        client = genai.Client(api_key=API_KEY)
+        logger.info("Gemini client initialized.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Gemini client: {e}")
+        client = None
+
+# --- FastAPI App ---
+app = FastAPI(title="Virtual Try-On API")
 
 # ==================================================
 # CORS Configuration
 # ==================================================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=["*"],  # tighten in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ==================================================
-# 2. BUSINESS LOGIC (Refined)
+# 2. BUSINESS LOGIC
 # ==================================================
 def find_garment_path(brand: str, gender: str, category: str, size: str):
-    """Matches files like: assets/inventory/nike/male/tshirts/nike-m-tshirts-M.jpg"""
+    """
+    Matches files like:
+    assets/inventory/nike/male/tshirts/nike-m-tshirts-M.jpg
+    """
     base = f"assets/inventory/{brand.lower()}/{gender}/{category}"
     if not os.path.exists(base):
         logger.warning(f"Inventory path not found: {base}")
@@ -54,6 +69,7 @@ def find_garment_path(brand: str, gender: str, category: str, size: str):
         path = os.path.join(base, filename)
         if os.path.exists(path):
             return path
+
     return None
 
 # ==================================================
@@ -68,23 +84,31 @@ async def generate_tryon(
     target_brand: str = Form(...),
     user_image: Optional[UploadFile] = File(None)
 ):
-    logger.info(f"Received Request: {current_brand} {current_size} -> {target_brand} {category}")
+    logger.info(
+        f"Request: {current_brand} {current_size} → {target_brand} {category}"
+    )
 
-    # --- 3.1: Identity Logic ---
+    # --- Gemini Availability Check ---
+    if not client:
+        raise HTTPException(
+            status_code=503,
+            detail="Gemini service is not configured on this deployment."
+        )
+
+    # --- 3.1 Identity Logic ---
     try:
         if user_image:
             img_bytes = await user_image.read()
-            user_img = Image.open(io.BytesIO(img_bytes))
+            user_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         else:
-            # Replicating your 'assets/default_models' logic
             default_path = f"assets/default_models/model_{gender}.jpg"
             if not os.path.exists(default_path):
                 raise FileNotFoundError(f"Default model missing at {default_path}")
-            user_img = Image.open(default_path)
+            user_img = Image.open(default_path).convert("RGB")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Image Error: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Image error: {e}")
 
-    # --- 3.2: Size Mapping Logic ---
+    # --- 3.2 Size Mapping ---
     final_size = mp.get_mapped_size_by_category(
         category=category,
         gender=gender,
@@ -94,22 +118,25 @@ async def generate_tryon(
     )
 
     if not final_size:
-        logger.error("Size mapping failed.")
         return JSONResponse(
-            status_code=400, 
+            status_code=400,
             content={"error": "Size mapping not found", "confidence": "LOW"}
         )
 
-    # --- 3.3: Inventory Resolution ---
-    cloth_path = find_garment_path(target_brand, gender, category, final_size)
+    # --- 3.3 Inventory Resolution ---
+    cloth_path = find_garment_path(
+        target_brand, gender, category, final_size
+    )
     if not cloth_path:
-        logger.error(f"Garment missing: {target_brand} {category} {final_size}")
-        raise HTTPException(status_code=404, detail="Garment not found in inventory.")
+        raise HTTPException(
+            status_code=404,
+            detail="Garment not found in inventory."
+        )
 
-    # --- 3.4: Gemini 3 Execution ---
+    # --- 3.4 Gemini Execution ---
     try:
-        cloth_img = Image.open(cloth_path)
-        
+        cloth_img = Image.open(cloth_path).convert("RGB")
+
         prompt = (
             f"Perform a realistic virtual try-on. Dress the person in the first image "
             f"with the {category} garment from the second image. "
@@ -120,18 +147,18 @@ async def generate_tryon(
         response = client.models.generate_content(
             model="gemini-3-pro-image-preview",
             contents=[user_img, cloth_img, prompt],
-            config=types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE", "TEXT"]
+            )
         )
 
-        # --- 3.5: Response Extraction ---
         if response.candidates:
             for part in response.candidates[0].content.parts:
                 if part.inline_data:
-                    logger.info("Generation Successful.")
-                    # Add mapped size to response headers
                     headers = {"X-Mapped-Size": final_size}
+                    logger.info("Try-on generation successful.")
                     return Response(
-                        content=part.inline_data.data, 
+                        content=part.inline_data.data,
                         media_type="image/png",
                         headers=headers
                     )
@@ -139,12 +166,30 @@ async def generate_tryon(
         raise ValueError("Gemini returned no image data.")
 
     except Exception as e:
-        logger.error(f"Gemini API Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Engine Error: {str(e)}")
+        logger.exception("Gemini execution failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Engine error: {e}"
+        )
 
 # ==================================================
-# 4. HEALTH CHECK (Ensures components are loaded)
+# 4. HEALTH CHECK
 # ==================================================
 @app.get("/health")
 def health_check():
-    return {"status": "online", "model": "gemini-3-pro-image-preview"}
+    return {
+        "status": "online",
+        "gemini_enabled": bool(client)
+    }
+
+# ==================================================
+# 5. LOCAL DEVELOPMENT ENTRYPOINT
+# ==================================================
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "app:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 8000)),
+        reload=True
+    )
