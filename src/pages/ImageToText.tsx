@@ -572,7 +572,7 @@ export default function ImageToText() {
 
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-medium text-foreground">Bullet Points</label>
+                <label className="text-sm font-medium text-foreground">Features</label>
               </div>
               <ul className="space-y-2">
                 {(generatedData?.bulletPoints || []).map((point, i) => (
