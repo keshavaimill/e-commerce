@@ -1,3 +1,9 @@
+# FastAPI & Server
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+
 # Core
 pandas
 pyyaml
