@@ -16,9 +16,9 @@ Pillow==11.0.0
 torch==2.5.1
 transformers==4.46.3
 
-# LangChain + OpenAI
+# LangChain + OpenAI (compatible versions - langchain 0.3.14 requires langchain-core>=0.3.29)
 langchain==0.3.14
-langchain-core==0.3.18
+langchain-core==0.3.29
 langchain-openai==0.2.9
 openai==1.57.4
 datasets==3.0.1
