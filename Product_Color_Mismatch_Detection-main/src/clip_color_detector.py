@@ -359,7 +359,7 @@ class ClipColorDetector:
 
             return {
                 "detected_color": detected_color,
-                "detected_confidence": 0.67, # GPT doesn't give confidence scores easily
+                "detected_confidence": 0.95, # GPT doesn't give confidence scores easily
                 "top_candidates": [(detected_color, 1.0)],
                 "fallback_model": "gpt-only",
                 "reason": reason
