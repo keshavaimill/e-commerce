@@ -351,15 +351,18 @@ export default function ColorMismatch() {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Enhanced Left Sidebar - Controls */}
               <div className="lg:col-span-1 space-y-4">
-                <Card className="p-6 border-2 border-border/50 bg-card/50 backdrop-blur-sm shadow-lg">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="p-2 rounded-lg bg-ai/10">
+                <Card className="p-6 lg:p-8 border border-border/40 bg-gradient-to-br from-card via-card/95 to-card/90 backdrop-blur-sm shadow-xl shadow-primary/5">
+                  <div className="flex items-center gap-3 mb-6 pb-4 border-b border-border/30">
+                    <div className="p-2.5 rounded-xl bg-gradient-to-br from-ai/20 to-ai/10 border border-ai/20">
                       <Upload className="w-5 h-5 text-ai" />
                     </div>
-                    <h3 className="font-semibold text-foreground text-lg">Upload & Test</h3>
+                    <div>
+                      <h3 className="font-semibold text-foreground text-lg">Upload & Test</h3>
+                      <p className="text-xs text-muted-foreground">Upload an image to detect color</p>
+                    </div>
                   </div>
                   
-                  <div className="space-y-4">
+                  <div className="space-y-5">
                     <div className="space-y-3">
                       <input
                         ref={fileInputRef}
@@ -369,49 +372,59 @@ export default function ColorMismatch() {
                         className="hidden"
                         id="image-upload"
                       />
-                      <Button
-                        variant="outline"
-                        className="w-full h-24 border-2 border-dashed hover:border-ai/50 hover:bg-ai/5 transition-colors"
-                        onClick={() => fileInputRef.current?.click()}
-                      >
-                        <div className="flex flex-col items-center gap-2">
-                          <Upload className="w-6 h-6 text-muted-foreground" />
-                          <span className="text-sm">Upload Product Image</span>
-                        </div>
-                      </Button>
                       
-                      {imagePreview && (
+                      {!imagePreview ? (
+                        <div
+                          className="w-full aspect-video bg-gradient-to-br from-muted/30 via-muted/20 to-muted/30 rounded-2xl flex items-center justify-center border-2 border-dashed border-border/40 cursor-pointer hover:border-ai/40 hover:bg-ai/5 hover:shadow-lg transition-all duration-300 group"
+                          onClick={() => fileInputRef.current?.click()}
+                        >
+                          <div className="text-center p-8">
+                            <div className="inline-flex p-4 rounded-2xl bg-ai/10 mb-4 group-hover:bg-ai/20 transition-colors">
+                              <Upload className="w-8 h-8 text-ai" />
+                            </div>
+                            <p className="text-sm font-medium text-foreground mb-1">Upload Product Image</p>
+                            <p className="text-xs text-muted-foreground">Click or drag and drop</p>
+                          </div>
+                        </div>
+                      ) : (
                         <div className="relative group">
-                          <div className="relative rounded-lg overflow-hidden border-2 border-border shadow-lg">
+                          <div className="relative rounded-2xl overflow-hidden border-2 border-border/40 shadow-lg">
                             <img
                               src={imagePreview}
                               alt="Preview"
-                              className="w-full h-48 object-cover"
+                              className="w-full aspect-video object-cover"
                             />
-                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="absolute top-2 right-2 h-8 w-8 bg-background/90 hover:bg-destructive/10 hover:text-destructive"
-                              onClick={handleRemoveImage}
-                            >
-                              <X className="w-4 h-4" />
-                            </Button>
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                              <Button
+                                variant="destructive"
+                                size="icon"
+                                className="opacity-0 group-hover:opacity-100 transition-opacity h-10 w-10"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRemoveImage();
+                                }}
+                              >
+                                <X className="w-5 h-5" />
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       )}
                     </div>
 
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-foreground">Expected Color</label>
+                    <div className="space-y-3 pt-2 border-t border-border/30">
+                      <label className="text-sm font-semibold text-foreground flex items-center gap-2">
+                        <Palette className="w-4 h-4 text-muted-foreground" />
+                        Expected Color
+                      </label>
                       <Input
                         placeholder="e.g., blue, red, navy blue"
                         value={expectedColor}
                         onChange={(e) => setExpectedColor(e.target.value)}
-                        className="h-10"
+                        className="h-11 border-border/40 focus:border-ai/40"
                       />
-                      <div className="flex items-start gap-2 p-2 bg-muted/50 rounded-lg text-xs text-muted-foreground">
-                        <Info className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                      <div className="flex items-start gap-2 p-3 bg-muted/30 rounded-lg text-xs text-muted-foreground border border-border/20">
+                        <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
                         <span>Enter the catalog/expected color for comparison</span>
                       </div>
                     </div>
