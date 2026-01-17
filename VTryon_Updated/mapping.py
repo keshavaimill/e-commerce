@@ -206,3 +206,14 @@ def get_mapped_size_by_category(
     except KeyError as e:
         logger.warning(f"Mapping Failed: {from_brand} {from_size} -> {to_brand} ({category}/{gender}). Error Key: {e}")
         return None
+
+# --------------------------------------------------
+# [NEW] HELPER FOR DROPDOWN
+# --------------------------------------------------
+def get_supported_sizes(category, gender, brand):
+    """Returns a list of valid sizes for the dropdown based on inputs."""
+    try:
+        # Example: returns ['S', 'M', 'L'] or ['44', '46', '48']
+        return list(CATEGORY_SIZE_MAP[category][gender][brand.lower()].keys())
+    except KeyError:
+        return ["M"] # Fallback default
