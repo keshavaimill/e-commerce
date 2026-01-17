@@ -307,4 +307,14 @@
     @apply rounded-lg transition-all duration-200 cursor-pointer;
     @apply hover:scale-105 hover:shadow-md;
   }
+
+  /* Hide Scrollbar */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
 }

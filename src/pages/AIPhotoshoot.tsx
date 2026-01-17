@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { 
   Camera, 
@@ -21,6 +21,7 @@ import {
   Zap,
   User,
   Shirt,
+  Filter,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,7 +29,20 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { apiClient } from "@/lib/api";
-import { generateTryOn, checkHealth, type GenerateTryOnParams, type VtoHealthResponse } from "@/lib/vto-api";
+import { 
+  getGarmentOptions, 
+  generateTryOn, 
+  getSupportedSizes,
+  base64ToBlobUrl,
+  type GetGarmentOptionsParams,
+  type GenerateTryOnParams,
+  type GarmentOption,
+  type GetGarmentOptionsResponse,
+  type GetSupportedSizesParams,
+  type VtoApiError
+} from "@/lib/vto-api";
+
+// Note: checkHealth and VtoHealthResponse removed as backend doesn't have /health endpoint
 import { Separator } from "@/components/ui/separator";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -163,6 +177,20 @@ export default function AIPhotoshoot() {
   const [vtoMappedSize, setVtoMappedSize] = useState<string | null>(null);
   const [vtoGeneratedImageUrl, setVtoGeneratedImageUrl] = useState<string | null>(null);
   const [vtoIsDragging, setVtoIsDragging] = useState(false);
+  
+  // Backend integration state (replacing mock recommendations)
+  const [vtoGarmentOptions, setVtoGarmentOptions] = useState<GarmentOption[]>([]);
+  const [vtoSelectedGarmentPath, setVtoSelectedGarmentPath] = useState<string | null>(null);
+  const [vtoGarmentImageUrls, setVtoGarmentImageUrls] = useState<Map<string, string>>(new Map());
+  const [vtoPreviewedOutfits, setVtoPreviewedOutfits] = useState<Array<{ id: string; imageUrl: string; garmentPath?: string }>>([]);
+  const [vtoActivePreviewId, setVtoActivePreviewId] = useState<string | null>(null);
+  
+  // State management for VTO flow (matching Streamlit behavior)
+  type VtoState = "idle" | "loading_options" | "options_loaded" | "generating" | "completed" | "error";
+  const [vtoState, setVtoState] = useState<VtoState>("idle");
+  const [vtoError, setVtoError] = useState<string | null>(null);
+  const [vtoSupportedSizes, setVtoSupportedSizes] = useState<string[]>([]);
+  const [focusedImage, setFocusedImage] = useState<{ imageUrl: string; id: string } | null>(null);
 
   // Fetch KPIs
   const { data: kpisData, isLoading: kpisLoading } = useQuery<{ kpis: PhotoshootKPI[] }>({
@@ -181,6 +209,31 @@ export default function AIPhotoshoot() {
     queryKey: ["photoshoot", "cost-analysis"],
     queryFn: () => apiClient.get<CostAnalysisResponse>("/photoshoot/cost-analysis?period=month"),
   });
+
+  // Fetch supported sizes dynamically (matching Streamlit behavior)
+  const { data: supportedSizesData } = useQuery({
+    queryKey: ["vto-supported-sizes", vtoCategory, vtoGender, vtoCurrentBrand],
+    queryFn: async () => {
+      return getSupportedSizes({
+        category: vtoCategory,
+        gender: vtoGender,
+        brand: vtoCurrentBrand,
+      });
+    },
+    enabled: !!vtoCategory && !!vtoGender && !!vtoCurrentBrand,
+    staleTime: 60000, // Cache for 1 minute
+  });
+
+  // Update supported sizes when data changes
+  useEffect(() => {
+    if (supportedSizesData?.sizes) {
+      setVtoSupportedSizes(supportedSizesData.sizes);
+      // Auto-select first size if current size is not in the list
+      if (!supportedSizesData.sizes.includes(vtoCurrentSize)) {
+        setVtoCurrentSize(supportedSizesData.sizes[0] || "M");
+      }
+    }
+  }, [supportedSizesData, vtoCurrentSize]);
 
   // Poll for photoshoot status
   const { data: statusData } = useQuery<PhotoshootStatus>({
@@ -280,49 +333,73 @@ export default function AIPhotoshoot() {
     },
   });
 
-  // Virtual Try-On health check
-  const { data: vtoHealthData, refetch: checkVtoHealthStatus, isFetching: isVtoHealthChecking, error: vtoHealthError } = useQuery<VtoHealthResponse>({
-    queryKey: ["vto-health"],
-    queryFn: checkHealth,
-    enabled: false,
-    retry: false,
-  });
+  // Note: Health check removed - backend doesn't expose /health endpoint
+  // Backend health is verified through actual API calls (getGarmentOptions)
 
-  // Handle VTO health check
-  useEffect(() => {
-    if (vtoHealthData) {
-      toast({
-        title: "Backend Online",
-        description: `Gemini: ${vtoHealthData.gemini_enabled ? "Enabled" : "Disabled"}`,
+  // Step 1: Get Garment Options mutation (matching Streamlit flow)
+  const vtoGetOptionsMutation = useMutation({
+    mutationFn: (params: GetGarmentOptionsParams) => getGarmentOptions(params),
+    onSuccess: (data) => {
+      setVtoMappedSize(data.mapped_size);
+      setVtoGarmentOptions(data.garments);
+      setVtoState("options_loaded");
+      setVtoError(null);
+      
+      // Convert base64 images to blob URLs for display
+      const imageUrlMap = new Map<string, string>();
+      data.garments.forEach((garment) => {
+        const blobUrl = base64ToBlobUrl(garment.image_base64);
+        if (blobUrl) {
+          imageUrlMap.set(garment.path, blobUrl);
+        }
       });
-    }
-  }, [vtoHealthData]);
-
-  useEffect(() => {
-    if (vtoHealthError) {
+      setVtoGarmentImageUrls(imageUrlMap);
+      
       toast({
-        title: "Backend Offline",
-        description: vtoHealthError instanceof Error ? vtoHealthError.message : "Connection failed",
+        title: "Styles Found!",
+        description: `Recommended Size: ${data.mapped_size}`,
+      });
+    },
+    onError: (error: Error) => {
+      setVtoState("error");
+      setVtoError(error.message);
+      setVtoGarmentOptions([]);
+      toast({
+        title: "Failed to Load Options",
+        description: error.message,
         variant: "destructive",
       });
-    }
-  }, [vtoHealthError]);
+    },
+  });
 
-  // Virtual Try-On generate mutation
+  // Step 2: Generate Try-On mutation (matching Streamlit flow)
   const vtoGenerateMutation = useMutation({
     mutationFn: (params: GenerateTryOnParams) => generateTryOn(params),
     onSuccess: (data) => {
       const url = URL.createObjectURL(data.image);
       setVtoGeneratedImageUrl(url);
-      if (data.mappedSize) {
-        setVtoMappedSize(data.mappedSize);
-      }
+      setVtoState("completed");
+      setVtoError(null);
+      
+      // Add to previewed outfits
+      setVtoPreviewedOutfits((prev) => [
+        {
+          id: "vto-generated",
+          imageUrl: url,
+          garmentPath: vtoSelectedGarmentPath || undefined,
+        },
+        ...prev,
+      ]);
+      setVtoActivePreviewId("vto-generated");
+      
       toast({
         title: "Try-On Generated!",
         description: "Virtual try-on image generated successfully",
       });
     },
     onError: (error: Error) => {
+      setVtoState("error");
+      setVtoError(error.message);
       toast({
         title: "Generation Failed",
         description: error.message,
@@ -574,7 +651,8 @@ export default function AIPhotoshoot() {
     }
   };
 
-  const handleVtoGenerate = () => {
+  // Step 1: Get Garment Options (matching Streamlit "Find Styles" button)
+  const handleVtoGetOptions = () => {
     if (!vtoCurrentSize.trim()) {
       toast({
         title: "Size required",
@@ -584,23 +662,53 @@ export default function AIPhotoshoot() {
       return;
     }
 
-    vtoGenerateMutation.mutate({
+    setVtoState("loading_options");
+    setVtoError(null);
+    setVtoSelectedGarmentPath(null);
+    setVtoGarmentOptions([]);
+    
+    vtoGetOptionsMutation.mutate({
       gender: vtoGender,
       category: vtoCategory,
       current_brand: vtoCurrentBrand,
       current_size: vtoCurrentSize,
       target_brand: vtoTargetBrand,
+    });
+  };
+
+  // Step 2: Generate Try-On (matching Streamlit "Generate Look" button)
+  const handleVtoGenerate = () => {
+    if (!vtoSelectedGarmentPath) {
+      toast({
+        title: "Select a garment",
+        description: "Please select a garment style first",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setVtoState("generating");
+    setVtoError(null);
+    
+    vtoGenerateMutation.mutate({
+      garment_path: vtoSelectedGarmentPath,
+      gender: vtoGender,
+      category: vtoCategory,
       user_image: vtoUploadedImage ?? undefined,
     });
   };
 
-  const handleVtoHealthCheck = async () => {
-    try {
-      await checkVtoHealthStatus();
-    } catch (error) {
-      // Error handled by query
-    }
+  // Handle garment selection (when user clicks on a garment option)
+  const handleVtoSelectGarment = (garment: GarmentOption) => {
+    setVtoSelectedGarmentPath(garment.path);
+    // Don't add static product images to previewed outfits
+    // Only AI-generated images should appear in recommendations
+    toast({
+      title: "Style Selected",
+      description: `Selected: ${garment.filename}. Click "Generate Virtual Try-On" to create AI-generated image.`,
+    });
   };
+
 
   const handleVtoDownload = () => {
     if (!vtoGeneratedImageUrl) return;
@@ -630,7 +738,79 @@ export default function AIPhotoshoot() {
   }, [vtoGeneratedImageUrl]);
 
   const vtoIsReady = vtoCurrentSize.trim() && !vtoGenerateMutation.isPending;
-  const vtoHasResult = !!vtoGeneratedImageUrl && !vtoGenerateMutation.isPending;
+  const vtoHasResult = !!vtoGeneratedImageUrl && !vtoGenerateMutation.isPending && vtoState === "completed";
+
+  // Handle recommendation click (updates preview synchronously)
+  // Only called when user explicitly clicks - no auto-selection
+  const handleVtoThumbnailClick = (outfitId: string) => {
+    setVtoActivePreviewId(outfitId);
+    // Preview will update automatically via vtoActivePreviewImage useMemo
+  };
+
+  // Handle image click in recommendations (opens focus modal)
+  const handleVtoImageClick = (e: React.MouseEvent, outfitId: string) => {
+    e.preventDefault();
+    e.stopPropagation(); // Prevent thumbnail click handler
+    const outfit = vtoPreviewedOutfits.find((o) => o.id === outfitId);
+    if (outfit) {
+      setFocusedImage({ imageUrl: outfit.imageUrl, id: outfit.id });
+    }
+  };
+
+  // Handle modal close
+  const handleCloseModal = () => {
+    setFocusedImage(null);
+  };
+
+  // Lock body scroll when modal is open
+  useEffect(() => {
+    if (focusedImage) {
+      document.body.style.overflow = "hidden";
+      return () => {
+        document.body.style.overflow = "";
+      };
+    }
+  }, [focusedImage]);
+
+  // Handle Esc key to close modal
+  useEffect(() => {
+    const handleEscKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && focusedImage) {
+        handleCloseModal();
+      }
+    };
+    window.addEventListener("keydown", handleEscKey);
+    return () => {
+      window.removeEventListener("keydown", handleEscKey);
+    };
+  }, [focusedImage]);
+
+  // Get active preview image
+  const vtoActivePreviewImage = useMemo(() => {
+    if (vtoActivePreviewId) {
+      const outfit = vtoPreviewedOutfits.find((o) => o.id === vtoActivePreviewId);
+      if (outfit) return outfit.imageUrl;
+    }
+    if (vtoGeneratedImageUrl) return vtoGeneratedImageUrl;
+    return null;
+  }, [vtoActivePreviewId, vtoPreviewedOutfits, vtoGeneratedImageUrl]);
+
+  // When a new try-on is generated, add it to previewed outfits (but do NOT auto-select)
+  useEffect(() => {
+    if (vtoGeneratedImageUrl && !vtoPreviewedOutfits.some((o) => o.id === "vto-generated")) {
+      setVtoPreviewedOutfits((prev) => [
+        {
+          id: "vto-generated",
+          imageUrl: vtoGeneratedImageUrl,
+          garmentPath: vtoSelectedGarmentPath || undefined,
+        },
+        ...prev,
+      ]);
+      // Do NOT auto-select - let user click to preview
+      // setVtoActivePreviewId("vto-generated");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vtoGeneratedImageUrl]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/20">
@@ -1230,12 +1410,26 @@ export default function AIPhotoshoot() {
                     <label className="text-sm font-medium text-foreground mb-2.5 block">
                       Current Size
                     </label>
-                    <Input
-                      placeholder="e.g., M, 44, 8"
+                    <Select
                       value={vtoCurrentSize}
-                      onChange={(e) => setVtoCurrentSize(e.target.value)}
-                      className="h-11"
-                    />
+                      onValueChange={(v) => setVtoCurrentSize(v)}
+                      disabled={vtoSupportedSizes.length === 0}
+                    >
+                      <SelectTrigger className="h-11">
+                        <SelectValue placeholder={vtoSupportedSizes.length === 0 ? "Loading sizes..." : "Select size"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {vtoSupportedSizes.length > 0 ? (
+                          vtoSupportedSizes.map((size) => (
+                            <SelectItem key={size} value={size}>
+                              {size}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value="M" disabled>Loading...</SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   <div>
@@ -1274,60 +1468,237 @@ export default function AIPhotoshoot() {
                 </div>
               </Card>
 
-              {/* Health Check Card */}
+              {/* Backend Status Card */}
               <Card className="p-4 border-border/50 bg-card/50 backdrop-blur-sm">
-                <Button
-                  variant="outline"
-                  className="w-full h-11"
-                  onClick={handleVtoHealthCheck}
-                  disabled={isVtoHealthChecking}
-                >
-                  {isVtoHealthChecking ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Checking...
-                    </>
-                  ) : (
-                    <>
-                      <Activity className="w-4 h-4 mr-2" />
-                      Check Backend Health
-                    </>
-                  )}
-                </Button>
-                {vtoHealthData && (
-                  <div className="mt-3 p-3 bg-success/10 rounded-lg border border-success/20">
-                    <div className="flex items-center gap-2 mb-1">
-                      <CheckCircle className="w-4 h-4 text-success" />
-                      <div className="font-medium text-success text-sm">Status: {vtoHealthData.status}</div>
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Gemini: {vtoHealthData.gemini_enabled ? "Enabled" : "Disabled"}
-                    </div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-sm font-medium text-foreground">Backend Status</span>
                   </div>
-                )}
-                {vtoHealthError && (
-                  <div className="mt-3 p-3 bg-destructive/10 rounded-lg border border-destructive/20">
-                    <div className="flex items-center gap-2 mb-1">
-                      <AlertCircle className="w-4 h-4 text-destructive" />
-                      <div className="font-medium text-destructive text-sm">Backend Offline</div>
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {vtoHealthError instanceof Error ? vtoHealthError.message : "Connection failed"}
-                    </div>
-                  </div>
-                )}
+                  <p className="text-xs text-muted-foreground">
+                    Backend health is verified through API calls. Use "Find Styles" to test connection.
+                  </p>
+                </div>
               </Card>
             </div>
 
             {/* Main Content Area - Preview & Results (8 columns) */}
             <div className="xl:col-span-8">
               <Card className="p-8 lg:p-10 border-border/50 bg-card/50 backdrop-blur-sm shadow-lg min-h-[600px] flex flex-col">
+                {/* Top Recommendation Header */}
+                <div className="mb-6">
+                  <div className="flex items-center justify-between mb-2">
+                    <h2 className="text-2xl lg:text-3xl font-bold text-foreground">
+                      Top Smart Recommendations
+                    </h2>
+                    <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20">
+                      <Zap className="w-4 h-4 text-primary" />
+                      <span className="text-sm font-medium text-primary">AI Generation</span>
+                    </div>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {vtoPreviewedOutfits.length > 0 
+                      ? `${vtoPreviewedOutfits.length} AI-generated try-on ${vtoPreviewedOutfits.length === 1 ? 'image' : 'images'}`
+                      : vtoState === "options_loaded" || vtoState === "completed"
+                      ? "Generate virtual try-on images to see recommendations here"
+                      : "AI-generated try-on images will appear here"}
+                  </p>
+                </div>
+
+                {/* Top Smart Recommendations - AI-Generated Images Only */}
+                {vtoPreviewedOutfits.length > 0 ? (
+                  <div className="mb-6">
+                    <div className="flex items-center gap-3 pb-2">
+                      {vtoPreviewedOutfits.map((outfit) => (
+                        <button
+                          key={outfit.id}
+                          onClick={() => handleVtoThumbnailClick(outfit.id)}
+                          className={cn(
+                            "group relative flex-shrink-0 w-24 h-32 rounded-lg overflow-hidden border-2 transition-all duration-300",
+                            vtoActivePreviewId === outfit.id
+                              ? "border-primary shadow-lg shadow-primary/30 scale-105"
+                              : "border-border/50 hover:border-primary/50 hover:shadow-md hover:scale-[1.02]"
+                          )}
+                        >
+                          {outfit.imageUrl ? (
+                            <>
+                              <img
+                                src={outfit.imageUrl}
+                                alt="AI-generated try-on"
+                                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110 cursor-pointer"
+                                onClick={(e) => handleVtoImageClick(e, outfit.id)}
+                                onError={(e) => {
+                                  console.error(`Failed to load image for outfit ${outfit.id}:`, outfit.imageUrl);
+                                  // Show placeholder on error
+                                  const target = e.target as HTMLImageElement;
+                                  const placeholder = target.nextElementSibling as HTMLElement;
+                                  if (placeholder) {
+                                    target.style.display = 'none';
+                                    placeholder.style.display = 'flex';
+                                  }
+                                }}
+                              />
+                              <div className="hidden w-full h-full bg-muted/50 flex items-center justify-center">
+                                <Camera className="w-8 h-8 text-muted-foreground/50" />
+                              </div>
+                            </>
+                          ) : (
+                            <div className="w-full h-full bg-muted/50 flex items-center justify-center">
+                              <Camera className="w-8 h-8 text-muted-foreground/50" />
+                            </div>
+                          )}
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/0 to-black/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                          {vtoActivePreviewId === outfit.id && (
+                            <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-primary flex items-center justify-center shadow-md">
+                              <CheckCircle className="w-3 h-3 text-primary-foreground" />
+                            </div>
+                          )}
+                          <div className="absolute bottom-1 left-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <p className="text-[10px] font-medium text-white bg-black/70 px-1.5 py-0.5 rounded truncate">
+                              AI Generated
+                            </p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : vtoState === "loading_options" || vtoGetOptionsMutation.isPending ? (
+                  <div className="mb-6">
+                    <div className="flex items-center gap-3 overflow-x-auto pb-2 scrollbar-hide">
+                      {[1, 2, 3].map((i) => (
+                        <div
+                          key={i}
+                          className="flex-shrink-0 w-24 h-32 rounded-lg bg-muted/50 animate-pulse border border-border/50"
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : vtoState === "error" && vtoError ? (
+                  <div className="mb-6 p-4 bg-destructive/10 rounded-xl border border-destructive/20 text-center">
+                    <p className="text-sm text-destructive">{vtoError}</p>
+                  </div>
+                ) : vtoState === "options_loaded" && vtoGarmentOptions.length === 0 ? (
+                  <div className="mb-6 p-4 bg-muted/30 rounded-xl border border-border/50 text-center">
+                    <p className="text-sm text-muted-foreground">
+                      No styles found. Try adjusting your search criteria.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="mb-6 p-4 bg-muted/30 rounded-xl border border-border/50 text-center">
+                    <p className="text-sm text-muted-foreground">
+                      Click "Find Styles" to begin, then generate try-on images to see recommendations here.
+                    </p>
+                  </div>
+                )}
+
+                {/* Step 1: Find Styles Button (matching Streamlit) */}
+                <div className="mb-6">
+                  <Button
+                    size="lg"
+                    onClick={handleVtoGetOptions}
+                    disabled={!vtoCurrentSize.trim() || vtoGetOptionsMutation.isPending}
+                    className={cn(
+                      "w-full h-12 text-base font-semibold shadow-lg hover:shadow-xl transition-all duration-300",
+                      "bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary"
+                    )}
+                  >
+                    {vtoGetOptionsMutation.isPending ? (
+                      <>
+                        <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                        Checking inventory...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-5 h-5 mr-2" />
+                        Find Styles
+                      </>
+                    )}
+                  </Button>
+                  
+                  {vtoMappedSize && vtoState === "options_loaded" && (
+                    <div className="mt-4 p-3 bg-success/10 rounded-lg border border-success/20 text-center">
+                      <p className="text-sm font-semibold text-success">
+                        Recommended Size: <span className="text-lg">{vtoMappedSize}</span>
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Garment Selection (Compact - Hidden after selection) */}
+                {vtoGarmentOptions.length > 0 && !vtoSelectedGarmentPath && (
+                  <div className="mb-6">
+                    <h3 className="text-sm font-semibold text-foreground mb-3">Select a Style to Generate</h3>
+                    <div className="grid grid-cols-3 gap-3">
+                      {vtoGarmentOptions.map((garment) => {
+                        const imageUrl = vtoGarmentImageUrls.get(garment.path);
+                        return (
+                          <button
+                            key={garment.path}
+                            onClick={() => handleVtoSelectGarment(garment)}
+                            className={cn(
+                              "group relative aspect-square rounded-lg overflow-hidden border-2 transition-all duration-300",
+                              "border-border/50 hover:border-primary/50 hover:shadow-md hover:scale-[1.02]"
+                            )}
+                          >
+                            {imageUrl ? (
+                              <img
+                                src={imageUrl}
+                                alt={garment.filename}
+                                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
+                              />
+                            ) : (
+                              <div className="w-full h-full bg-muted flex items-center justify-center">
+                                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+                              </div>
+                            )}
+                            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2">
+                              <p className="text-xs font-medium text-white text-center truncate">
+                                SKU {garment.sku_index}
+                              </p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {vtoMappedSize && (
+                      <p className="text-xs text-muted-foreground text-center mt-2">
+                        Size {vtoMappedSize}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Selected Garment Indicator */}
+                {vtoSelectedGarmentPath && vtoGarmentOptions.length > 0 && (
+                  <div className="mb-6 p-3 bg-primary/10 rounded-lg border border-primary/20 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {vtoGarmentImageUrls.has(vtoSelectedGarmentPath) && (
+                        <img
+                          src={vtoGarmentImageUrls.get(vtoSelectedGarmentPath)}
+                          alt="Selected garment"
+                          className="w-16 h-16 rounded-lg object-cover border-2 border-primary/50"
+                        />
+                      )}
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">Style Selected</p>
+                        <p className="text-xs text-muted-foreground">
+                          {vtoGarmentOptions.find(g => g.path === vtoSelectedGarmentPath)?.filename || "Ready to generate"}
+                        </p>
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setVtoSelectedGarmentPath(null)}
+                      className="text-xs"
+                    >
+                      Change
+                    </Button>
+                  </div>
+                )}
+
                 {/* Header Section */}
                 <div className="text-center space-y-3 mb-8">
-                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20">
-                    <Zap className="w-4 h-4 text-primary" />
-                    <span className="text-sm font-medium text-primary">AI Generation</span>
-                  </div>
                   <h2 className="text-2xl lg:text-3xl font-bold text-foreground">
                     Virtual Try-On Preview
                   </h2>
@@ -1382,56 +1753,85 @@ export default function AIPhotoshoot() {
                   </div>
                 )}
 
-                {/* Generated Image Display */}
-                {vtoHasResult && (
+                {/* Main Preview Display - Interactive (only shows when user clicks a recommendation) */}
+                {vtoActivePreviewImage ? (
                   <div className="flex-1 space-y-6 animate-fade-in">
-                    <div className="flex items-center justify-center gap-2 p-3 bg-success/10 rounded-lg border border-success/20">
-                      <CheckCircle className="w-5 h-5 text-success" />
-                      <span className="font-semibold text-success">Try-On Generated Successfully!</span>
-                    </div>
-                    <div className="relative group rounded-2xl overflow-hidden border-2 border-border bg-muted/20 shadow-2xl">
+                    {vtoHasResult && vtoActivePreviewId === "vto-generated" && (
+                      <div className="flex items-center justify-center gap-2 p-3 bg-success/10 rounded-lg border border-success/20">
+                        <CheckCircle className="w-5 h-5 text-success" />
+                        <span className="font-semibold text-success">Try-On Generated Successfully!</span>
+                      </div>
+                    )}
+                    <div className="relative group rounded-2xl overflow-hidden border-2 border-border bg-muted/20 shadow-2xl transition-all duration-500">
                       <img
-                        src={vtoGeneratedImageUrl}
-                        alt="Generated Try-On"
-                        className="w-full h-auto transition-transform duration-500 group-hover:scale-[1.02]"
+                        key={vtoActivePreviewId || "default"}
+                        src={vtoActivePreviewImage}
+                        alt="Virtual Try-On Preview"
+                        className="w-full h-auto transition-opacity duration-500 group-hover:scale-[1.02]"
+                        style={{
+                          transition: "opacity 0.3s ease-in-out, transform 0.5s ease-in-out",
+                        }}
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
                     </div>
                     <div className="flex items-center justify-between p-4 bg-muted/30 rounded-xl border border-border/50">
                       <div className="space-y-1">
-                        <p className="text-sm font-semibold text-foreground">Final Result from Gemini 3</p>
-                        {vtoMappedSize && (
+                        <p className="text-sm font-semibold text-foreground">
+                          {vtoActivePreviewId === "vto-generated" 
+                            ? "Final Result from Gemini 3" 
+                            : vtoSelectedGarmentPath
+                            ? `Preview: ${vtoSelectedGarmentPath.split('/').pop() || "Selected Garment"}`
+                            : "Virtual Try-On Preview"}
+                        </p>
+                        {vtoMappedSize && vtoActivePreviewId === "vto-generated" && (
                           <p className="text-xs text-muted-foreground">
                             Mapped size: <span className="font-semibold text-primary">{vtoMappedSize}</span>
                           </p>
                         )}
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleVtoDownload}
-                          className="gap-2"
-                        >
-                          <Download className="w-4 h-4" />
-                          Download
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleVtoRegenerate}
-                          className="gap-2"
-                        >
-                          <RefreshCw className="w-4 h-4" />
-                          Regenerate
-                        </Button>
-                      </div>
+                      {vtoHasResult && vtoActivePreviewId === "vto-generated" && (
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleVtoDownload}
+                            className="gap-2"
+                          >
+                            <Download className="w-4 h-4" />
+                            Download
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleVtoRegenerate}
+                            className="gap-2"
+                          >
+                            <RefreshCw className="w-4 h-4" />
+                            Regenerate
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  /* Empty State - No selection made yet */
+                  <div className="flex-1 flex flex-col items-center justify-center space-y-4 py-16 px-4">
+                    <div className="w-20 h-20 rounded-full bg-muted/50 flex items-center justify-center border-2 border-dashed border-border/50">
+                      <Camera className="w-10 h-10 text-muted-foreground/50" />
+                    </div>
+                    <div className="text-center space-y-2 max-w-sm">
+                      <p className="text-lg font-semibold text-foreground">Select an Image to Preview</p>
+                      <p className="text-sm text-muted-foreground">
+                        {vtoPreviewedOutfits.length > 0
+                          ? "Click on any AI-generated try-on image above to see it in the preview"
+                          : "Generate virtual try-on images to see recommendations"}
+                      </p>
                     </div>
                   </div>
                 )}
 
-                {/* Empty State */}
-                {!vtoHasResult && !vtoGenerateMutation.isPending && (
+                {/* Empty State - Initial state */}
+                {vtoState === "idle" && !vtoGetOptionsMutation.isPending && (
                   <div className="flex-1 flex flex-col items-center justify-center space-y-6 py-16">
                     <div className="relative">
                       <div className="w-32 h-32 rounded-2xl bg-gradient-to-br from-primary/10 to-primary/5 flex items-center justify-center border-2 border-primary/20">
@@ -1445,6 +1845,26 @@ export default function AIPhotoshoot() {
                       <p className="text-xl font-semibold text-foreground">Ready to Generate</p>
                       <p className="text-sm text-muted-foreground leading-relaxed">
                         Configure your settings on the left and click generate to create your virtual try-on experience
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Empty State - When options are loaded but none selected */}
+                {vtoState === "options_loaded" && !vtoSelectedGarmentPath && !vtoGenerateMutation.isPending && (
+                  <div className="flex-1 flex flex-col items-center justify-center space-y-6 py-16">
+                    <div className="relative">
+                      <div className="w-32 h-32 rounded-2xl bg-gradient-to-br from-primary/10 to-primary/5 flex items-center justify-center border-2 border-primary/20">
+                        <Camera className="w-16 h-16 text-primary/60" />
+                      </div>
+                      <div className="absolute -top-2 -right-2 w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
+                        <Sparkles className="w-4 h-4 text-primary" />
+                      </div>
+                    </div>
+                    <div className="text-center space-y-2 max-w-md">
+                      <p className="text-xl font-semibold text-foreground">Select a Garment</p>
+                      <p className="text-sm text-muted-foreground leading-relaxed">
+                        Click on any garment above to select it, then click "Generate Look" to create your virtual try-on
                       </p>
                     </div>
                   </div>
@@ -1493,8 +1913,49 @@ export default function AIPhotoshoot() {
             </div>
           </div>
         </TabsContent>
-      </Tabs>
+        </Tabs>
       </div>
+
+      {/* Image Focus Modal */}
+      {focusedImage && (
+        <div
+          className="fixed inset-0 z-[1000] flex items-center justify-center p-4 animate-in fade-in-0 duration-300"
+          onClick={handleCloseModal}
+          aria-modal="true"
+          role="dialog"
+          aria-label="Image preview"
+        >
+          {/* Backdrop with blur */}
+          <div 
+            className="absolute inset-0 bg-black/70 backdrop-blur-md transition-opacity duration-300"
+            style={{ backgroundColor: "rgba(0, 0, 0, 0.7)" }}
+          />
+          
+          {/* Close Button */}
+          <button
+            onClick={handleCloseModal}
+            className="absolute top-4 right-4 z-[1001] w-10 h-10 rounded-full bg-black/50 hover:bg-black/70 backdrop-blur-sm border border-white/20 flex items-center justify-center transition-all duration-200 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-white/50"
+            aria-label="Close preview"
+          >
+            <X className="w-5 h-5 text-white" />
+          </button>
+
+          {/* Image Container */}
+          <div
+            className="relative z-[1001] max-w-[90vw] max-h-[90vh] w-auto h-auto animate-in zoom-in-95 duration-300"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={focusedImage.imageUrl}
+              alt="AI-generated try-on preview"
+              className="max-w-full max-h-[90vh] w-auto h-auto object-contain rounded-lg shadow-2xl"
+              style={{
+                boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

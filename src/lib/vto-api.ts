@@ -1,9 +1,19 @@
+/**
+ * Virtual Try-On API Service
+ * 
+ * This service layer matches the exact backend API used by Streamlit frontend.
+ * Endpoints are defined in VTryon_Updated/app.py
+ * 
+ * Base URL: Configured via VITE_VTO_API_URL environment variable
+ * Default: https://vto-jshi.onrender.com (Render deployment)
+ * Local override: Set VITE_VTO_API_URL=http://127.0.0.1:8000 for local development
+ */
+
 const VTO_BASE_URL = import.meta.env.VITE_VTO_API_URL ?? "https://vto-jshi.onrender.com";
 
-export interface VtoHealthResponse {
-  status: string;
-  gemini_enabled: boolean;
-}
+// ==================================================
+// ERROR HANDLING
+// ==================================================
 
 export class VtoApiError extends Error {
   status: number;
@@ -51,64 +61,88 @@ async function handleVtoResponse<T>(res: Response): Promise<T> {
   return (await res.text()) as unknown as T;
 }
 
-export interface GenerateTryOnParams {
+// ==================================================
+// TYPE DEFINITIONS
+// ==================================================
+
+export interface GetGarmentOptionsParams {
   gender: "male" | "female";
   category: "tshirts" | "pants" | "jackets" | "shoes";
   current_brand: "Nike" | "Adidas" | "Zara";
   current_size: string;
   target_brand: "Nike" | "Adidas" | "Zara";
+}
+
+export interface GarmentOption {
+  sku_index: number;
+  path: string;
+  filename: string;
+  image_base64: string;
+}
+
+export interface GetGarmentOptionsResponse {
+  status: "success";
+  mapped_size: string;
+  garments: GarmentOption[];
+}
+
+export interface GenerateTryOnParams {
+  garment_path: string;
+  gender: "male" | "female";
+  category: "tshirts" | "pants" | "jackets" | "shoes";
   user_image?: File;
 }
 
 export interface GenerateTryOnResponse {
   image: Blob;
-  mappedSize?: string;
 }
 
+export interface GetSupportedSizesParams {
+  category: "tshirts" | "pants" | "jackets" | "shoes";
+  gender: "male" | "female";
+  brand: "Nike" | "Adidas" | "Zara";
+}
+
+export interface GetSupportedSizesResponse {
+  status: "success";
+  sizes: string[];
+}
+
+// ==================================================
+// API FUNCTIONS (Matching Streamlit Backend)
+// ==================================================
+
 /**
- * Generate a virtual try-on image using the FastAPI backend
+ * Get Supported Sizes (New - for dynamic dropdown)
+ * 
+ * Matches backend endpoint: GET /get-supported-sizes
+ * 
+ * Returns valid sizes for a given category, gender, and brand.
+ * Used to populate the size dropdown dynamically.
  */
-export async function generateTryOn(
-  params: GenerateTryOnParams
-): Promise<GenerateTryOnResponse> {
-  const formData = new FormData();
-  formData.append("gender", params.gender);
-  formData.append("category", params.category);
-  formData.append("current_brand", params.current_brand);
-  formData.append("current_size", params.current_size);
-  formData.append("target_brand", params.target_brand);
-
-  if (params.user_image) {
-    formData.append("user_image", params.user_image);
-  }
-
-  const url = `${VTO_BASE_URL}/generate-tryon`;
+export async function getSupportedSizes(
+  params: GetSupportedSizesParams
+): Promise<GetSupportedSizesResponse> {
+  const url = `${VTO_BASE_URL}/get-supported-sizes?category=${params.category}&gender=${params.gender}&brand=${params.brand}`;
 
   try {
     const res = await fetch(url, {
-      method: "POST",
-      body: formData,
+      method: "GET",
     });
 
-    const image = await handleVtoResponse<Blob>(res);
-    const mappedSize = res.headers.get("X-Mapped-Size") ?? undefined;
-
-    return {
-      image,
-      mappedSize,
-    };
+    return await handleVtoResponse<GetSupportedSizesResponse>(res);
   } catch (error) {
     if (error instanceof VtoApiError) {
       throw error;
     }
-    // Handle network errors (connection refused, CORS, etc.)
+    // Handle network errors
     if (error instanceof TypeError) {
-      const isNetworkError = 
+      const isNetworkError =
         error.message.includes("fetch") ||
         error.message.includes("Failed to fetch") ||
         error.message.includes("NetworkError") ||
         error.message.includes("Network request failed");
-      
+
       if (isNetworkError) {
         throw new VtoApiError(
           `Could not connect to FastAPI backend at ${VTO_BASE_URL}. Please ensure the server is running.`,
@@ -124,31 +158,49 @@ export async function generateTryOn(
 }
 
 /**
- * Check the health status of the VTO backend
+ * Step 1: Get Garment Options
+ * 
+ * Matches Streamlit endpoint: POST /get-garment-options
+ * 
+ * Returns available garment options based on size mapping and inventory.
+ * This is called first to show available styles before generation.
  */
-export async function checkHealth(): Promise<VtoHealthResponse> {
-  const url = `${VTO_BASE_URL}/health`;
+export async function getGarmentOptions(
+  params: GetGarmentOptionsParams
+): Promise<GetGarmentOptionsResponse> {
+  const formData = new FormData();
+  formData.append("gender", params.gender);
+  formData.append("category", params.category);
+  formData.append("current_brand", params.current_brand);
+  formData.append("current_size", params.current_size);
+  formData.append("target_brand", params.target_brand);
+
+  const url = `${VTO_BASE_URL}/get-garment-options`;
 
   try {
     const res = await fetch(url, {
-      method: "GET",
+      method: "POST",
+      body: formData,
     });
 
-    return await handleVtoResponse<VtoHealthResponse>(res);
+    return await handleVtoResponse<GetGarmentOptionsResponse>(res);
   } catch (error) {
     if (error instanceof VtoApiError) {
       throw error;
     }
     // Handle network errors
     if (error instanceof TypeError) {
-      const isNetworkError = 
+      const isNetworkError =
         error.message.includes("fetch") ||
         error.message.includes("Failed to fetch") ||
         error.message.includes("NetworkError") ||
         error.message.includes("Network request failed");
-      
+
       if (isNetworkError) {
-        throw new VtoApiError(`Backend offline at ${VTO_BASE_URL}`, 0);
+        throw new VtoApiError(
+          `Could not connect to FastAPI backend at ${VTO_BASE_URL}. Please ensure the server is running.`,
+          0
+        );
       }
     }
     throw new VtoApiError(
@@ -158,3 +210,81 @@ export async function checkHealth(): Promise<VtoHealthResponse> {
   }
 }
 
+/**
+ * Step 2: Generate Try-On
+ * 
+ * Matches Streamlit endpoint: POST /generate-tryon
+ * 
+ * Generates the virtual try-on image using Gemini AI.
+ * Requires a garment_path from Step 1.
+ */
+export async function generateTryOn(
+  params: GenerateTryOnParams
+): Promise<GenerateTryOnResponse> {
+  const formData = new FormData();
+  formData.append("garment_path", params.garment_path);
+  formData.append("gender", params.gender);
+  formData.append("category", params.category);
+
+  if (params.user_image) {
+    formData.append("user_image", params.user_image);
+  }
+
+  const url = `${VTO_BASE_URL}/generate-tryon`;
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      body: formData,
+    });
+
+    const image = await handleVtoResponse<Blob>(res);
+
+    return {
+      image,
+    };
+  } catch (error) {
+    if (error instanceof VtoApiError) {
+      throw error;
+    }
+    // Handle network errors
+    if (error instanceof TypeError) {
+      const isNetworkError =
+        error.message.includes("fetch") ||
+        error.message.includes("Failed to fetch") ||
+        error.message.includes("NetworkError") ||
+        error.message.includes("Network request failed");
+
+      if (isNetworkError) {
+        throw new VtoApiError(
+          `Could not connect to FastAPI backend at ${VTO_BASE_URL}. Please ensure the server is running.`,
+          0
+        );
+      }
+    }
+    throw new VtoApiError(
+      error instanceof Error ? error.message : "Unknown error occurred",
+      0
+    );
+  }
+}
+
+/**
+ * Helper: Convert base64 image to Blob URL
+ * Used for displaying garment options from backend
+ */
+export function base64ToBlobUrl(base64String: string): string {
+  try {
+    const byteCharacters = atob(base64String);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: "image/jpeg" });
+    return URL.createObjectURL(blob);
+  } catch (error) {
+    console.error("Error converting base64 to blob:", error);
+    return "";
+  }
+}

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   Camera,
@@ -16,6 +16,7 @@ import {
   Shirt,
   ArrowRight,
   Activity,
+  Filter,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +41,12 @@ export default function VirtualTryOn() {
   const [mappedSize, setMappedSize] = useState<string | null>(null);
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  
+  // New state for recommendations and previews
+  const [styleType, setStyleType] = useState<"casual" | "formal" | "sporty" | "ethnic">("casual");
+  const [selectedRecommendationId, setSelectedRecommendationId] = useState<string | null>(null);
+  const [previewedOutfits, setPreviewedOutfits] = useState<Array<{ id: string; imageUrl: string; category: string; style: string }>>([]);
+  const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
 
   // Health check query
   const { data: healthData, refetch: checkHealthStatus, isFetching: isHealthChecking, error: healthError } = useQuery<VtoHealthResponse>({
@@ -210,6 +217,108 @@ export default function VirtualTryOn() {
 
   const isReady = currentSize.trim() && !generateMutation.isPending;
   const hasResult = !!generatedImageUrl && !generateMutation.isPending;
+
+  // Mock recommendation data - in real app, this would come from API
+  const mockRecommendations = useMemo(() => {
+    const baseImages = [
+      "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=400&h=600&fit=crop",
+      "https://images.unsplash.com/photo-1552374196-c4e7ffc6e126?w=400&h=600&fit=crop",
+      "https://images.unsplash.com/photo-1503341504253-dff4815485f1?w=400&h=600&fit=crop",
+      "https://images.unsplash.com/photo-1551028719-00167b16eac5?w=400&h=600&fit=crop",
+      "https://images.unsplash.com/photo-1558769132-cb1aea458c5e?w=400&h=600&fit=crop",
+      "https://images.unsplash.com/photo-1556821840-3a63f95609a7?w=400&h=600&fit=crop",
+    ];
+
+    const categories = ["tshirts", "pants", "jackets", "shoes"] as const;
+    const styles = ["casual", "formal", "sporty", "ethnic"] as const;
+    
+    return Array.from({ length: 12 }, (_, i) => ({
+      id: `rec-${i + 1}`,
+      imageUrl: baseImages[i % baseImages.length],
+      category: categories[i % categories.length],
+      style: styles[i % styles.length],
+      name: `Outfit ${i + 1}`,
+    }));
+  }, []);
+
+  // Filter recommendations based on category and style
+  const filteredRecommendations = useMemo(() => {
+    return mockRecommendations.filter(
+      (rec) => rec.category === category && rec.style === styleType
+    );
+  }, [mockRecommendations, category, styleType]);
+
+  // Get top 3 recommendations for the strip
+  const topRecommendations = useMemo(() => {
+    return filteredRecommendations.slice(0, 3);
+  }, [filteredRecommendations]);
+
+  // Handle recommendation click
+  const handleRecommendationClick = (recId: string) => {
+    const recommendation = mockRecommendations.find((r) => r.id === recId);
+    if (!recommendation) return;
+
+    setSelectedRecommendationId(recId);
+    setActivePreviewId(recId);
+
+    // Add to previewed outfits if not already there
+    setPreviewedOutfits((prev) => {
+      if (prev.some((o) => o.id === recId)) return prev;
+      return [
+        ...prev,
+        {
+          id: recId,
+          imageUrl: recommendation.imageUrl,
+          category: recommendation.category,
+          style: recommendation.style,
+        },
+      ];
+    });
+  };
+
+  // Handle thumbnail click
+  const handleThumbnailClick = (outfitId: string) => {
+    setActivePreviewId(outfitId);
+    setSelectedRecommendationId(outfitId);
+  };
+
+  // Get active preview image
+  const activePreviewImage = useMemo(() => {
+    if (activePreviewId) {
+      const outfit = previewedOutfits.find((o) => o.id === activePreviewId);
+      if (outfit) return outfit.imageUrl;
+    }
+    if (generatedImageUrl) return generatedImageUrl;
+    return null;
+  }, [activePreviewId, previewedOutfits, generatedImageUrl]);
+
+  // Update recommendations when category or style changes
+  useEffect(() => {
+    if (topRecommendations.length > 0) {
+      const firstRec = topRecommendations[0];
+      if (selectedRecommendationId !== firstRec.id) {
+        handleRecommendationClick(firstRec.id);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category, styleType]);
+
+  // When a new try-on is generated, add it to previewed outfits
+  useEffect(() => {
+    if (generatedImageUrl && !previewedOutfits.some((o) => o.id === "generated")) {
+      setPreviewedOutfits((prev) => [
+        {
+          id: "generated",
+          imageUrl: generatedImageUrl,
+          category,
+          style: styleType,
+        },
+        ...prev,
+      ]);
+      setActivePreviewId("generated");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generatedImageUrl]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/20">
@@ -500,12 +609,127 @@ export default function VirtualTryOn() {
           {/* Main Content Area - Preview & Results (8 columns) */}
           <div className="xl:col-span-8">
             <Card className="p-8 lg:p-10 border-border/50 bg-card/50 backdrop-blur-sm shadow-lg min-h-[600px] flex flex-col">
+              {/* Top Recommendation Header */}
+              <div className="mb-6">
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-2xl lg:text-3xl font-bold text-foreground">
+                    Top Smart Recommendations
+                  </h2>
+                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20">
+                    <Zap className="w-4 h-4 text-primary" />
+                    <span className="text-sm font-medium text-primary">AI Generation</span>
+                  </div>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Size {currentSize || "36"} recommendations available
+                </p>
+              </div>
+
+              {/* Persistent Thumbnail Strip */}
+              {previewedOutfits.length > 0 && (
+                <div className="mb-6">
+                  <div className="flex items-center gap-3 overflow-x-auto pb-2 scrollbar-hide">
+                    {previewedOutfits.map((outfit) => (
+                      <button
+                        key={outfit.id}
+                        onClick={() => handleThumbnailClick(outfit.id)}
+                        className={cn(
+                          "relative flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border-2 transition-all duration-300",
+                          activePreviewId === outfit.id
+                            ? "border-primary shadow-lg shadow-primary/20 scale-105"
+                            : "border-border/50 hover:border-primary/50 hover:scale-[1.02]"
+                        )}
+                      >
+                        <img
+                          src={outfit.imageUrl}
+                          alt="Previewed outfit"
+                          className="w-full h-full object-cover"
+                        />
+                        {activePreviewId === outfit.id && (
+                          <div className="absolute inset-0 bg-primary/20 border-2 border-primary rounded-lg" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Recommendation Image Strip */}
+              {topRecommendations.length > 0 && (
+                <div className="mb-6">
+                  <div className="grid grid-cols-3 gap-4">
+                    {topRecommendations.map((rec) => (
+                      <button
+                        key={rec.id}
+                        onClick={() => handleRecommendationClick(rec.id)}
+                        className={cn(
+                          "group relative aspect-[3/4] rounded-xl overflow-hidden border-2 transition-all duration-300",
+                          selectedRecommendationId === rec.id
+                            ? "border-primary shadow-xl shadow-primary/30 scale-[1.02]"
+                            : "border-border/50 hover:border-primary/50 hover:shadow-lg hover:scale-[1.01]"
+                        )}
+                      >
+                        <img
+                          src={rec.imageUrl}
+                          alt={rec.name}
+                          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/0 to-black/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                        {selectedRecommendationId === rec.id && (
+                          <div className="absolute top-2 right-2 w-6 h-6 rounded-full bg-primary flex items-center justify-center">
+                            <CheckCircle className="w-4 h-4 text-primary-foreground" />
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Options / Filters Panel */}
+              <div className="mb-6 p-4 bg-muted/30 rounded-xl border border-border/50">
+                <div className="flex items-center gap-2 mb-4">
+                  <Filter className="w-4 h-4 text-muted-foreground" />
+                  <h3 className="text-sm font-semibold text-foreground">Filter Options</h3>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-2 block">
+                      Clothing Category
+                    </label>
+                    <Select value={category} onValueChange={(v) => setCategory(v as typeof category)}>
+                      <SelectTrigger className="h-10">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="tshirts">T-Shirts</SelectItem>
+                        <SelectItem value="pants">Pants</SelectItem>
+                        <SelectItem value="jackets">Jackets</SelectItem>
+                        <SelectItem value="shoes">Shoes</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-2 block">
+                      Style Type
+                    </label>
+                    <Select value={styleType} onValueChange={(v) => setStyleType(v as typeof styleType)}>
+                      <SelectTrigger className="h-10">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="casual">Casual</SelectItem>
+                        <SelectItem value="formal">Formal</SelectItem>
+                        <SelectItem value="sporty">Sporty</SelectItem>
+                        <SelectItem value="ethnic">Ethnic</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+
               {/* Header Section */}
               <div className="text-center space-y-3 mb-8">
-                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20">
-                  <Zap className="w-4 h-4 text-primary" />
-                  <span className="text-sm font-medium text-primary">AI Generation</span>
-                </div>
                 <h2 className="text-2xl lg:text-3xl font-bold text-foreground">
                   Virtual Try-On Preview
                 </h2>
@@ -560,8 +784,70 @@ export default function VirtualTryOn() {
                 </div>
               )}
 
-              {/* Generated Image Display */}
-              {hasResult && (
+              {/* Main Preview Display - Interactive */}
+              {(activePreviewImage || hasResult) && (
+                <div className="flex-1 space-y-6 animate-fade-in">
+                  {hasResult && activePreviewId === "generated" && (
+                    <div className="flex items-center justify-center gap-2 p-3 bg-success/10 rounded-lg border border-success/20">
+                      <CheckCircle className="w-5 h-5 text-success" />
+                      <span className="font-semibold text-success">Try-On Generated Successfully!</span>
+                    </div>
+                  )}
+                  <div className="relative group rounded-2xl overflow-hidden border-2 border-border bg-muted/20 shadow-2xl transition-all duration-500">
+                    <img
+                      key={activePreviewId || "default"}
+                      src={activePreviewImage || generatedImageUrl || ""}
+                      alt="Virtual Try-On Preview"
+                      className="w-full h-auto transition-opacity duration-500 group-hover:scale-[1.02]"
+                      style={{
+                        transition: "opacity 0.3s ease-in-out, transform 0.5s ease-in-out",
+                      }}
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                  </div>
+                  <div className="flex items-center justify-between p-4 bg-muted/30 rounded-xl border border-border/50">
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold text-foreground">
+                        {activePreviewId === "generated" 
+                          ? "Final Result from Gemini 3" 
+                          : selectedRecommendationId 
+                          ? `Preview: ${mockRecommendations.find(r => r.id === selectedRecommendationId)?.name || "Outfit"}`
+                          : "Virtual Try-On Preview"}
+                      </p>
+                      {mappedSize && activePreviewId === "generated" && (
+                        <p className="text-xs text-muted-foreground">
+                          Mapped size: <span className="font-semibold text-primary">{mappedSize}</span>
+                        </p>
+                      )}
+                    </div>
+                    {hasResult && activePreviewId === "generated" && (
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleDownload}
+                          className="gap-2"
+                        >
+                          <Download className="w-4 h-4" />
+                          Download
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleRegenerate}
+                          className="gap-2"
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                          Regenerate
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Generated Image Display - Fallback for when no preview is active */}
+              {hasResult && !activePreviewImage && (
                 <div className="flex-1 space-y-6 animate-fade-in">
                   <div className="flex items-center justify-center gap-2 p-3 bg-success/10 rounded-lg border border-success/20">
                     <CheckCircle className="w-5 h-5 text-success" />
@@ -569,7 +855,7 @@ export default function VirtualTryOn() {
                   </div>
                   <div className="relative group rounded-2xl overflow-hidden border-2 border-border bg-muted/20 shadow-2xl">
                     <img
-                      src={generatedImageUrl}
+                      src={generatedImageUrl || ""}
                       alt="Generated Try-On"
                       className="w-full h-auto transition-transform duration-500 group-hover:scale-[1.02]"
                     />
@@ -608,8 +894,8 @@ export default function VirtualTryOn() {
                 </div>
               )}
 
-              {/* Empty State */}
-              {!hasResult && !generateMutation.isPending && (
+              {/* Empty State - Only show if no recommendations are available */}
+              {!hasResult && !generateMutation.isPending && !activePreviewImage && topRecommendations.length === 0 && (
                 <div className="flex-1 flex flex-col items-center justify-center space-y-6 py-16">
                   <div className="relative">
                     <div className="w-32 h-32 rounded-2xl bg-gradient-to-br from-primary/10 to-primary/5 flex items-center justify-center border-2 border-primary/20">
@@ -623,6 +909,26 @@ export default function VirtualTryOn() {
                     <p className="text-xl font-semibold text-foreground">Ready to Generate</p>
                     <p className="text-sm text-muted-foreground leading-relaxed">
                       Configure your settings on the left and click generate to create your virtual try-on experience
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Empty State - When recommendations exist but none selected */}
+              {!hasResult && !generateMutation.isPending && !activePreviewImage && topRecommendations.length > 0 && (
+                <div className="flex-1 flex flex-col items-center justify-center space-y-6 py-16">
+                  <div className="relative">
+                    <div className="w-32 h-32 rounded-2xl bg-gradient-to-br from-primary/10 to-primary/5 flex items-center justify-center border-2 border-primary/20">
+                      <Camera className="w-16 h-16 text-primary/60" />
+                    </div>
+                    <div className="absolute -top-2 -right-2 w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
+                      <Sparkles className="w-4 h-4 text-primary" />
+                    </div>
+                  </div>
+                  <div className="text-center space-y-2 max-w-md">
+                    <p className="text-xl font-semibold text-foreground">Select a Recommendation</p>
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      Click on any recommendation above to preview, or generate a new virtual try-on
                     </p>
                   </div>
                 </div>
