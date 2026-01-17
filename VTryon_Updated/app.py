@@ -6,6 +6,7 @@ import time
 from typing import Optional
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.responses import Response, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from dotenv import load_dotenv
 from google import genai
@@ -33,6 +34,17 @@ if not API_KEY:
 logger.info("Initializing Gemini Client...")
 client = genai.Client(api_key=API_KEY)
 app = FastAPI(title="Gemini 3 Virtual Try-On API")
+
+# Configure CORS to allow frontend requests
+# For production, you may want to restrict allow_origins to specific domains
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for development and Render deployment
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 logger.info("FastAPI Backend Started Successfully.")
 
 def encode_image_to_base64(image_path):
@@ -114,6 +126,32 @@ async def get_garment_options(
         "mapped_size": final_size,
         "garments": found_garments
     }
+
+# ==================================================
+# 2.5. ENDPOINT: GET SUPPORTED SIZES (New - for dynamic dropdown)
+# ==================================================
+@app.get("/get-supported-sizes")
+async def get_supported_sizes(
+    category: str,
+    gender: str,
+    brand: str
+):
+    """Returns valid sizes for the dropdown based on category, gender, and brand."""
+    logger.info(f"Request: Get Supported Sizes | {category} | {gender} | {brand}")
+    
+    try:
+        sizes = mp.get_supported_sizes(category, gender, brand)
+        logger.info(f"Returning {len(sizes)} supported sizes: {sizes}")
+        return {
+            "status": "success",
+            "sizes": sizes
+        }
+    except KeyError as e:
+        logger.warning(f"Invalid parameters for size lookup: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid category/gender/brand combination: {str(e)}"}
+        )
 
 # ==================================================
 # 3. ENDPOINT: GENERATE TRY-ON
