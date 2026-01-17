@@ -357,7 +357,7 @@ export default function ColorMismatch() {
                       <Upload className="w-5 h-5 text-ai" />
                     </div>
                     <div>
-                      <h3 className="font-semibold text-foreground text-lg">Upload & Test</h3>
+                    <h3 className="font-semibold text-foreground text-lg">Upload & Test</h3>
                       <p className="text-xs text-muted-foreground">Upload an image to detect color</p>
                     </div>
                   </div>
@@ -376,12 +376,12 @@ export default function ColorMismatch() {
                       {!imagePreview ? (
                         <div
                           className="w-full aspect-video bg-gradient-to-br from-muted/30 via-muted/20 to-muted/30 rounded-2xl flex items-center justify-center border-2 border-dashed border-border/40 cursor-pointer hover:border-ai/40 hover:bg-ai/5 hover:shadow-lg transition-all duration-300 group"
-                          onClick={() => fileInputRef.current?.click()}
-                        >
+                        onClick={() => fileInputRef.current?.click()}
+                      >
                           <div className="text-center p-8">
                             <div className="inline-flex p-4 rounded-2xl bg-ai/10 mb-4 group-hover:bg-ai/20 transition-colors">
                               <Upload className="w-8 h-8 text-ai" />
-                            </div>
+                        </div>
                             <p className="text-sm font-medium text-foreground mb-1">Upload Product Image</p>
                             <p className="text-xs text-muted-foreground">Click or drag and drop</p>
                           </div>
@@ -395,17 +395,17 @@ export default function ColorMismatch() {
                               className="w-full aspect-video object-cover"
                             />
                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                              <Button
+                            <Button
                                 variant="destructive"
-                                size="icon"
+                              size="icon"
                                 className="opacity-0 group-hover:opacity-100 transition-opacity h-10 w-10"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   handleRemoveImage();
                                 }}
-                              >
+                            >
                                 <X className="w-5 h-5" />
-                              </Button>
+                            </Button>
                             </div>
                           </div>
                         </div>

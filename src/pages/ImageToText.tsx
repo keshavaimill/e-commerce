@@ -139,7 +139,7 @@ export default function ImageToText() {
       // Don't overwrite the preview - keep the FileReader data URL for immediate display
       // Only update filename if not already set
       if (!uploadedFileName) {
-        setUploadedFileName(data.filename);
+      setUploadedFileName(data.filename);
       }
       // Silent success - don't show toast to avoid interrupting user flow
       // toast({
@@ -200,7 +200,7 @@ export default function ImageToText() {
         }
       } else if (uploadedImageId) {
         // Invalidate queries for translations and quality checks if imageId exists
-        queryClient.invalidateQueries({ queryKey: ["image-to-text", "translations", uploadedImageId] });
+      queryClient.invalidateQueries({ queryKey: ["image-to-text", "translations", uploadedImageId] });
       }
       
       toast({
@@ -451,7 +451,7 @@ export default function ImageToText() {
       <div className="space-y-4">
         <div className="flex items-center gap-3">
           <div className="p-2 rounded-lg bg-primary/10">
-            <BarChart3 className="w-5 h-5 text-primary" />
+          <BarChart3 className="w-5 h-5 text-primary" />
           </div>
           <h2 className="text-xl font-semibold text-foreground">Performance Metrics</h2>
         </div>
@@ -524,7 +524,7 @@ export default function ImageToText() {
               <FileText className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <h3 className="text-lg font-semibold text-foreground">AI Description Builder</h3>
+            <h3 className="text-lg font-semibold text-foreground">AI Description Builder</h3>
               <p className="text-xs text-muted-foreground">Upload an image to generate product descriptions</p>
             </div>
           </div>
@@ -564,7 +564,7 @@ export default function ImageToText() {
                     <div className="flex flex-col items-center gap-2 bg-background/90 px-4 py-2 rounded-lg">
                       <Loader2 className="w-6 h-6 animate-spin text-primary" />
                       <span className="text-sm text-foreground font-medium">Uploading...</span>
-                    </div>
+              </div>
                   </div>
                 </div>
               ) : (
@@ -671,20 +671,20 @@ export default function ImageToText() {
                     <FileText className="w-4 h-4 text-primary" />
                     Title
                   </label>
-                  <Button 
-                    size="sm" 
-                    variant="ghost" 
+                <Button 
+                  size="sm" 
+                  variant="ghost" 
                     className="h-8 gap-1.5 text-xs hover:bg-primary/10"
-                    onClick={() => handleCopy(generatedData?.title || "", "Title")}
-                  >
+                  onClick={() => handleCopy(generatedData?.title || "", "Title")}
+                >
                     <Copy className="w-3.5 h-3.5" />
-                    Copy
-                  </Button>
-                </div>
+                  Copy
+                </Button>
+              </div>
                 <div className="p-3.5 bg-background/50 rounded-lg text-sm font-medium text-foreground border border-border/30">
                   {generatedData?.title || "No title generated"}
-                </div>
               </div>
+            </div>
 
               <div className="rounded-xl p-4 bg-gradient-to-br from-muted/30 via-muted/20 to-transparent border border-border/30">
                 <div className="flex items-center justify-between mb-3">
@@ -692,22 +692,22 @@ export default function ImageToText() {
                     <FileText className="w-4 h-4 text-muted-foreground" />
                     Short Description
                   </label>
-                  <Button 
-                    size="sm" 
-                    variant="ghost" 
+                <Button 
+                  size="sm" 
+                  variant="ghost" 
                     className="h-8 gap-1.5 text-xs hover:bg-muted"
-                    onClick={() => handleCopy(generatedData?.shortDescription || "", "Short description")}
-                  >
+                  onClick={() => handleCopy(generatedData?.shortDescription || "", "Short description")}
+                >
                     <Copy className="w-3.5 h-3.5" />
-                    Copy
-                  </Button>
-                </div>
-                <Textarea 
-                  className="min-h-[100px] resize-none bg-background/50 border-border/30 text-sm"
-                  value={generatedData?.shortDescription || ""}
-                  readOnly
-                />
+                  Copy
+                </Button>
               </div>
+              <Textarea 
+                  className="min-h-[100px] resize-none bg-background/50 border-border/30 text-sm"
+                value={generatedData?.shortDescription || ""}
+                readOnly
+              />
+            </div>
 
               <div className="rounded-xl p-4 bg-gradient-to-br from-muted/30 via-muted/20 to-transparent border border-border/30">
                 <div className="flex items-center justify-between mb-3">
@@ -724,7 +724,7 @@ export default function ImageToText() {
                     <Copy className="w-3.5 h-3.5" />
                     Copy
                   </Button>
-                </div>
+              </div>
                 <Textarea 
                   className="min-h-[150px] resize-none bg-background/50 border-border/30 text-sm"
                   value={generatedData?.longDescription || ""}
@@ -746,13 +746,13 @@ export default function ImageToText() {
                       <li key={i} className="flex items-start gap-3 text-sm p-2.5 rounded-lg bg-background/50 border border-border/20 hover:border-primary/20 transition-colors">
                         <span className="text-primary font-bold mt-0.5">•</span>
                         <span className="text-foreground flex-1">{point}</span>
-                      </li>
+                  </li>
                     ))
                   ) : (
                     <li className="text-sm text-muted-foreground italic p-2.5">No features generated</li>
                   )}
-                </ul>
-              </div>
+              </ul>
+            </div>
             </div>
           ) : (
             <div className="pt-4 border-t border-border/30">
@@ -765,36 +765,36 @@ export default function ImageToText() {
 
             {/* Language Tabs */}
             {languages.length > 0 && (
-              <div className="pt-4 border-t border-border/30">
+            <div className="pt-4 border-t border-border/30">
                 <label className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
                   <Languages className="w-4 h-4 text-muted-foreground" />
                   Available Translations
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  {languages.map((lang) => (
-                    <button
-                      key={lang.code}
-                      onClick={() => setActiveLanguage(lang.code)}
-                      className={cn(
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {languages.map((lang) => (
+                  <button
+                    key={lang.code}
+                    onClick={() => setActiveLanguage(lang.code)}
+                    className={cn(
                         "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200",
                         "border",
-                        activeLanguage === lang.code
+                      activeLanguage === lang.code
                           ? "bg-primary text-primary-foreground border-primary shadow-md shadow-primary/20"
                           : "bg-muted/50 text-muted-foreground hover:bg-muted border-border/40 hover:border-primary/30"
-                      )}
-                    >
+                    )}
+                  >
                       <span className="text-base">{lang.flag}</span>
-                      <span>{lang.name}</span>
-                      {lang.status === 'complete' && (
+                    <span>{lang.name}</span>
+                    {lang.status === 'complete' && (
                         <CheckCircle className="w-3.5 h-3.5 text-success" />
-                      )}
-                      {lang.status === 'error' && (
+                    )}
+                    {lang.status === 'error' && (
                         <AlertTriangle className="w-3.5 h-3.5 text-destructive" />
-                      )}
-                    </button>
-                  ))}
-                </div>
+                    )}
+                  </button>
+                ))}
               </div>
+            </div>
             )}
           </div>
         </div>
@@ -816,7 +816,7 @@ export default function ImageToText() {
                   <Target className="w-5 h-5 text-primary" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-foreground">Attribute Confidence Matrix</h3>
+                <h3 className="text-lg font-semibold text-foreground">Attribute Confidence Matrix</h3>
                   <p className="text-xs text-muted-foreground">AI-detected product attributes</p>
                 </div>
               </div>
@@ -874,8 +874,8 @@ export default function ImageToText() {
               )}
             </div>
           </div>
-        </div>
-      </div>
+                </div>
+              </div>
     </div>
   );
 }
