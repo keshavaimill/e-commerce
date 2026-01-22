@@ -41,6 +41,14 @@ import {
   type GetSupportedSizesParams,
   type VtoApiError
 } from "@/lib/vto-api";
+import {
+  getPhotoshootTemplates,
+  generatePhotoshoot,
+  base64ToBlobUrl as photoshootBase64ToBlobUrl,
+  type PhotoshootTemplatesResponse as BackendPhotoshootTemplatesResponse,
+  type PhotoshootTemplate as BackendPhotoshootTemplate,
+  type PhotoshootApiError
+} from "@/lib/photoshoot-api";
 
 // Note: checkHealth and VtoHealthResponse removed as backend doesn't have /health endpoint
 import { Separator } from "@/components/ui/separator";
@@ -57,9 +65,9 @@ interface PhotoshootKPI {
 }
 
 interface PhotoshootTemplate {
-  id: number;
+  id: string | number;
   name: string;
-  uses: number;
+  uses: number | string;
   image: string;
   previewUrl?: string;
 }
@@ -70,39 +78,12 @@ interface PhotoshootTemplatesResponse {
   global: PhotoshootTemplate[];
 }
 
-interface UploadResponse {
-  success: boolean;
-  imageId: string;
-  url: string;
-  filename: string;
-  size: number;
-  dimensions?: {
-    width: number;
-    height: number;
-  };
+// State for generated images (3 views)
+interface GeneratedView {
+  view: "Front" | "Side" | "Angle";
+  imageUrl: string;
 }
 
-interface GenerateResponse {
-  success: boolean;
-  jobId: string;
-  estimatedTime: string;
-  statusUrl: string;
-}
-
-interface PhotoshootStatus {
-  jobId: string;
-  status: "processing" | "completed" | "failed";
-  progress: number;
-  result?: {
-    generatedImages: Array<{
-      id: string;
-      url: string;
-      template: string;
-      marketplace: string;
-    }>;
-  };
-  error?: string | null;
-}
 
 interface CostAnalysisResponse {
   regionSavings: Array<{
@@ -154,15 +135,15 @@ const mockTemplates = {
 
 export default function AIPhotoshoot() {
   const queryClient = useQueryClient();
-  const [selectedTemplate, setSelectedTemplate] = useState<number | null>(null);
+  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const [activeRegion, setActiveRegion] = useState<"indian" | "southAfrican" | "global">("indian");
-  const [selectedSkinTone, setSelectedSkinTone] = useState<string | null>(null);
+  const [selectedSkinTone, setSelectedSkinTone] = useState<string>("Wheatish");
   const [selectedMarketplace, setSelectedMarketplace] = useState<Set<string>>(new Set());
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
-  const [uploadedImageId, setUploadedImageId] = useState<string | null>(null);
-  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
-  const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [generatedViews, setGeneratedViews] = useState<GeneratedView[]>([]);
+  const [isGenerating, setIsGenerating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Virtual Try-On states
@@ -198,11 +179,39 @@ export default function AIPhotoshoot() {
     queryFn: () => apiClient.get<{ kpis: PhotoshootKPI[] }>("/photoshoot/kpis"),
   });
 
-  // Fetch templates
-  const { data: templatesData, isLoading: templatesLoading } = useQuery<PhotoshootTemplatesResponse>({
-    queryKey: ["photoshoot", "templates", activeRegion],
-    queryFn: () => apiClient.get<PhotoshootTemplatesResponse>(`/photoshoot/templates?region=${activeRegion}`),
+  // Fetch templates from real backend
+  const { data: backendTemplatesData, isLoading: templatesLoading, error: templatesError } = useQuery<BackendPhotoshootTemplatesResponse>({
+    queryKey: ["photoshoot", "templates"],
+    queryFn: () => getPhotoshootTemplates(),
+    retry: 2,
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
   });
+
+  // Transform backend templates to frontend format
+  const templatesData = useMemo<PhotoshootTemplatesResponse | null>(() => {
+    if (!backendTemplatesData) return null;
+    
+    // Map region names: backend uses "Indian", "South African", "Global"
+    const regionMap: Record<string, keyof BackendPhotoshootTemplatesResponse> = {
+      indian: "Indian",
+      southAfrican: "South African",
+      global: "Global",
+    };
+
+    const transformTemplate = (template: BackendPhotoshootTemplate): PhotoshootTemplate => ({
+      id: template.id,
+      name: template.name,
+      uses: parseInt(template.uses.replace(/[^\d]/g, "")) || 0,
+      image: template.img,
+      previewUrl: template.img,
+    });
+
+    return {
+      indian: (backendTemplatesData.Indian || []).map(transformTemplate),
+      southAfrican: (backendTemplatesData["South African"] || []).map(transformTemplate),
+      global: (backendTemplatesData.Global || []).map(transformTemplate),
+    };
+  }, [backendTemplatesData]);
 
   // Fetch cost analysis
   const { data: costAnalysisData, isLoading: costAnalysisLoading } = useQuery<CostAnalysisResponse>({
@@ -235,103 +244,62 @@ export default function AIPhotoshoot() {
     }
   }, [supportedSizesData, vtoCurrentSize]);
 
-  // Poll for photoshoot status
-  const { data: statusData } = useQuery<PhotoshootStatus>({
-    queryKey: ["photoshoot", "status", currentJobId],
-    queryFn: () => apiClient.get<PhotoshootStatus>(`/photoshoot/status/${currentJobId}`),
-    enabled: !!currentJobId,
-    refetchInterval: (data) => {
-      if (data?.status === "processing") return 2000; // Poll every 2 seconds
-      return false;
-    },
-  });
-
-  // Update generated image when status completes
-  useEffect(() => {
-    if (statusData?.status === "completed" && statusData.result?.generatedImages?.[0]) {
-      setGeneratedImageUrl(statusData.result.generatedImages[0].url);
-    }
-  }, [statusData]);
-
-  // Upload mutation
-  const uploadMutation = useMutation({
-    mutationFn: async (file: File) => {
-      const formData = new FormData();
-      formData.append("file", file);
-      return apiClient.post<UploadResponse>("/photoshoot/upload", formData);
-    },
-    onSuccess: (data) => {
-      setUploadedImageId(data.imageId);
-      setUploadedImage(data.url);
-      setUploadedFileName(data.filename);
-      toast({
-        title: "Image uploaded",
-        description: `Successfully uploaded ${data.filename}`,
-      });
-    },
-    onError: () => {
-      toast({
-        title: "Upload error",
-        description: "Failed to upload image",
-        variant: "destructive",
-      });
-    },
-  });
-
-  // Generate mutation
+  // Generate photoshoot mutation (using real backend)
   const generateMutation = useMutation({
     mutationFn: async () => {
-      if (!uploadedImageId || !selectedTemplate) throw new Error("Missing required fields");
-      return apiClient.post<GenerateResponse>("/photoshoot/generate", {
-        imageId: uploadedImageId,
-        templateId: selectedTemplate,
-        skinTone: selectedSkinTone,
-        region: activeRegion,
-        marketplaces: Array.from(selectedMarketplace),
+      if (!uploadedFile || !selectedTemplate) {
+        throw new Error("Please upload an image and select a template");
+      }
+
+      // Map frontend region to backend region name
+      const regionMap: Record<string, string> = {
+        indian: "Indian",
+        southAfrican: "South African",
+        global: "Global",
+      };
+
+      const backendRegion = regionMap[activeRegion] || "Global";
+
+      return generatePhotoshoot({
+        template_id: selectedTemplate,
+        region: backendRegion,
+        skin_tone: selectedSkinTone || "Wheatish",
+        cloth_image: uploadedFile,
       });
     },
     onSuccess: (data) => {
-      setCurrentJobId(data.jobId);
-      toast({
-        title: "Generating photoshoot",
-        description: `AI is creating your product photoshoot... Estimated time: ${data.estimatedTime}`,
-      });
+      if (data.status === "success" && data.images) {
+        // Convert base64 images to blob URLs
+        const views: GeneratedView[] = data.images.map((img) => {
+          const blobUrl = photoshootBase64ToBlobUrl(img.image);
+          return {
+            view: img.view,
+            imageUrl: blobUrl || `data:image/png;base64,${img.image}`,
+          };
+        });
+        setGeneratedViews(views);
+        setIsGenerating(false);
+        toast({
+          title: "Photoshoot Generated!",
+          description: `Successfully generated ${views.length} views (Front, Side, Angle)`,
+        });
+      } else {
+        throw new Error(data.error || "Failed to generate photoshoot");
+      }
     },
-    onError: () => {
+    onError: (error: Error | PhotoshootApiError) => {
+      setIsGenerating(false);
+      const errorMessage = error instanceof PhotoshootApiError 
+        ? error.detail || error.message 
+        : error.message;
       toast({
         title: "Generation failed",
-        description: "Failed to start photoshoot generation",
+        description: errorMessage || "Failed to generate photoshoot. Please try again.",
         variant: "destructive",
       });
     },
   });
 
-  // Regenerate mutation
-  const regenerateMutation = useMutation({
-    mutationFn: async () => {
-      if (!uploadedImageId || !selectedTemplate) throw new Error("Missing required fields");
-      return apiClient.post<GenerateResponse>("/photoshoot/regenerate", {
-        imageId: uploadedImageId,
-        templateId: selectedTemplate,
-        skinTone: selectedSkinTone,
-        previousJobId: currentJobId,
-      });
-    },
-    onSuccess: (data) => {
-      setCurrentJobId(data.jobId);
-      toast({
-        title: "Regenerating",
-        description: "Creating a new variation...",
-      });
-    },
-    onError: () => {
-      toast({
-        title: "Regeneration failed",
-        description: "Failed to regenerate photoshoot",
-        variant: "destructive",
-      });
-    },
-  });
 
   // Note: Health check removed - backend doesn't expose /health endpoint
   // Backend health is verified through actual API calls (getGarmentOptions)
@@ -447,16 +415,14 @@ export default function AIPhotoshoot() {
         return;
       }
 
-      // Create preview
+      // Store file and create preview
+      setUploadedFile(file);
       const reader = new FileReader();
       reader.onloadend = () => {
         setUploadedImage(reader.result as string);
         setUploadedFileName(file.name);
       };
       reader.readAsDataURL(file);
-
-      // Upload to backend
-      uploadMutation.mutate(file);
     }
   };
 
@@ -473,15 +439,13 @@ export default function AIPhotoshoot() {
         return;
       }
 
+      setUploadedFile(file);
       const reader = new FileReader();
       reader.onloadend = () => {
         setUploadedImage(reader.result as string);
         setUploadedFileName(file.name);
       };
       reader.readAsDataURL(file);
-
-      // Upload to backend
-      uploadMutation.mutate(file);
     } else {
       toast({
         title: "Invalid file",
@@ -498,9 +462,8 @@ export default function AIPhotoshoot() {
   const handleRemoveImage = () => {
     setUploadedImage(null);
     setUploadedFileName(null);
-    setUploadedImageId(null);
-    setGeneratedImageUrl(null);
-    setCurrentJobId(null);
+    setUploadedFile(null);
+    setGeneratedViews([]);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -511,7 +474,7 @@ export default function AIPhotoshoot() {
   };
 
   const handleGeneratePhotoshoot = () => {
-    if (!uploadedImageId) {
+    if (!uploadedFile) {
       toast({
         title: "Upload image",
         description: "Please upload a product image first",
@@ -527,23 +490,19 @@ export default function AIPhotoshoot() {
       });
       return;
     }
+    setIsGenerating(true);
+    setGeneratedViews([]);
     generateMutation.mutate();
   };
 
   const handleRegenerate = () => {
-    if (!uploadedImageId) {
-      toast({
-        title: "Upload image",
-        description: "Please upload an image first",
-        variant: "destructive",
-      });
-      return;
-    }
-    regenerateMutation.mutate();
+    handleGeneratePhotoshoot();
   };
 
-  const handleDownload = async () => {
-    if (!generatedImageUrl && !uploadedImage) {
+  const handleDownload = async (view?: GeneratedView) => {
+    const imageToDownload = view || generatedViews[0];
+    
+    if (!imageToDownload && !uploadedImage) {
       toast({
         title: "No image to download",
         description: "Please generate or upload an image first",
@@ -552,7 +511,7 @@ export default function AIPhotoshoot() {
       return;
     }
     
-    const imageUrl = generatedImageUrl || uploadedImage;
+    const imageUrl = imageToDownload?.imageUrl || uploadedImage;
     if (!imageUrl) return;
 
     try {
@@ -561,14 +520,17 @@ export default function AIPhotoshoot() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = uploadedFileName || 'photoshoot-image.png';
+      const filename = view 
+        ? `${uploadedFileName?.replace(/\.[^/.]+$/, "") || 'photoshoot'}_${view.view.toLowerCase()}.png`
+        : uploadedFileName || 'photoshoot-image.png';
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
       toast({
         title: "Downloading",
-        description: "Image download started",
+        description: `Downloading ${view ? view.view : 'image'}...`,
       });
     } catch (error) {
       toast({
@@ -931,30 +893,50 @@ export default function AIPhotoshoot() {
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
               </div>
-            ) : (
-              Object.entries(templates).map(([region, items]) => (
+            ) : templatesData ? (
+              Object.entries(templatesData).map(([region, items]) => (
                 <TabsContent key={region} value={region} className="mt-0">
                   <div className="grid grid-cols-2 gap-3">
                     {items.map((template) => (
                     <div
                       key={template.id}
-                      onClick={() => setSelectedTemplate(template.id)}
+                      onClick={() => setSelectedTemplate(String(template.id))}
                       className={cn(
                         "p-4 rounded-xl border-2 cursor-pointer transition-all duration-300 group",
                         "hover:border-primary/50 hover:bg-primary/5 hover:shadow-md",
-                        selectedTemplate === template.id 
+                        selectedTemplate === String(template.id)
                           ? "border-primary bg-primary/10 shadow-md scale-[1.02]" 
                           : "border-border/50 hover:scale-[1.01]"
                       )}
                     >
-                      <div className="aspect-square bg-gradient-to-br from-sand-100 to-sand-200 rounded-lg mb-3 flex items-center justify-center transition-transform duration-300 group-hover:scale-105">
-                        <Camera className="w-8 h-8 text-sand-400" />
+                      <div className="aspect-square bg-gradient-to-br from-sand-100 to-sand-200 rounded-lg mb-3 overflow-hidden transition-transform duration-300 group-hover:scale-105">
+                        {template.previewUrl ? (
+                          <img 
+                            src={template.previewUrl} 
+                            alt={template.name}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              // Fallback to placeholder if image fails to load
+                              const target = e.target as HTMLImageElement;
+                              target.style.display = 'none';
+                              const parent = target.parentElement;
+                              if (parent) {
+                                parent.innerHTML = '<div class="w-full h-full flex items-center justify-center"><Camera class="w-8 h-8 text-sand-400" /></div>';
+                              }
+                            }}
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center">
+                            <Camera className="w-8 h-8 text-sand-400" />
+                          </div>
+                        )}
                       </div>
                       <div className="space-y-1.5">
                         <h4 className="font-semibold text-foreground text-sm">{template.name}</h4>
-                        <p className="text-xs text-muted-foreground">{template.image}</p>
                         <Badge variant="secondary" className="text-xs font-medium">
-                          {template.uses.toLocaleString()} uses
+                          {typeof template.uses === 'number' 
+                            ? template.uses.toLocaleString() 
+                            : template.uses} uses
                         </Badge>
                       </div>
                     </div>
@@ -962,30 +944,43 @@ export default function AIPhotoshoot() {
                   </div>
                 </TabsContent>
               ))
-            )}
+            ) : templatesError ? (
+              <div className="p-4 bg-destructive/10 rounded-lg border border-destructive/20 text-center">
+                <p className="text-sm text-destructive">
+                  Failed to load templates. Make sure the backend is running at {import.meta.env.VITE_PHOTOSHOOT_API_URL || "http://localhost:8000"}
+                </p>
+              </div>
+            ) : null}
           </Tabs>
 
           {/* Skin Tone Selector */}
           <div className="mt-6 pt-4 border-t border-border/30">
             <h4 className="text-sm font-medium text-foreground mb-3">Skin Tone</h4>
             <div className="flex gap-2">
-              {['#f5d0c5', '#e8b89a', '#d4a574', '#c68642', '#8d5524', '#5c3c24'].map((color) => (
+              {[
+                { color: '#f5d0c5', label: 'Fair' },
+                { color: '#e8b89a', label: 'Light' },
+                { color: '#d4a574', label: 'Wheatish' },
+                { color: '#c68642', label: 'Tan' },
+                { color: '#8d5524', label: 'Brown' },
+                { color: '#5c3c24', label: 'Deep Dark' },
+              ].map((tone) => (
                 <button
-                  key={color}
-                  onClick={() => setSelectedSkinTone(color)}
+                  key={tone.color}
+                  onClick={() => setSelectedSkinTone(tone.label)}
                   className={cn(
                     "w-8 h-8 rounded-full border-2 transition-colors",
-                    selectedSkinTone === color 
+                    selectedSkinTone === tone.label
                       ? "border-primary ring-2 ring-primary/20" 
                       : "border-border hover:border-primary"
                   )}
-                  style={{ backgroundColor: color }}
-                  title={`Skin tone ${color}`}
+                  style={{ backgroundColor: tone.color }}
+                  title={tone.label}
                 />
               ))}
             </div>
             {selectedSkinTone && (
-              <p className="text-xs text-muted-foreground mt-2">Selected skin tone</p>
+              <p className="text-xs text-muted-foreground mt-2">Selected: {selectedSkinTone}</p>
             )}
           </div>
         </div>
@@ -1013,38 +1008,47 @@ export default function AIPhotoshoot() {
             onDragOver={handleDragOver}
             onClick={!uploadedImage ? handleBrowseFiles : undefined}
           >
-            {uploadMutation.isPending ? (
-              <div className="flex items-center justify-center h-full">
+            {isGenerating ? (
+              <div className="flex flex-col items-center justify-center h-full space-y-4">
                 <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                <span className="ml-2 text-sm text-muted-foreground">Uploading...</span>
+                <span className="text-sm text-muted-foreground">Generating 3 views...</span>
+                <Progress value={undefined} className="w-2/3" />
               </div>
-            ) : generatedImageUrl ? (
-              <div className="relative w-full h-full group">
-                <img 
-                  src={generatedImageUrl} 
-                  alt="Generated photoshoot" 
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                  <Button
-                    variant="destructive"
-                    size="icon"
-                    className="opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleRemoveImage();
-                    }}
-                  >
-                    <X className="w-4 h-4" />
-                  </Button>
-                </div>
-                {uploadedFileName && (
-                  <div className="absolute bottom-2 left-2 right-2">
-                    <div className="bg-black/70 text-white text-xs px-2 py-1 rounded truncate">
-                      {uploadedFileName}
-                    </div>
-                  </div>
-                )}
+            ) : generatedViews.length > 0 ? (
+              <div className="relative w-full h-full">
+                <Tabs defaultValue={generatedViews[0]?.view} className="w-full h-full">
+                  <TabsList className="grid w-full grid-cols-3 mb-2">
+                    {generatedViews.map((view) => (
+                      <TabsTrigger key={view.view} value={view.view}>
+                        {view.view}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                  {generatedViews.map((view) => (
+                    <TabsContent key={view.view} value={view.view} className="mt-0 m-0 h-[calc(100%-60px)]">
+                      <div className="relative w-full h-full group">
+                        <img 
+                          src={view.imageUrl} 
+                          alt={`${view.view} view`}
+                          className="w-full h-full object-cover rounded-lg"
+                        />
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                          <Button
+                            variant="destructive"
+                            size="icon"
+                            className="opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRemoveImage();
+                            }}
+                          >
+                            <X className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </TabsContent>
+                  ))}
+                </Tabs>
               </div>
             ) : uploadedImage ? (
               <div className="relative w-full h-full group">
@@ -1097,9 +1101,9 @@ export default function AIPhotoshoot() {
               variant="ghost" 
               className="gap-1" 
               onClick={handleRegenerate}
-              disabled={regenerateMutation.isPending || !uploadedImageId}
+              disabled={isGenerating || !uploadedFile}
             >
-              {regenerateMutation.isPending ? (
+              {isGenerating ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <RefreshCw className="w-4 h-4" />
@@ -1112,29 +1116,52 @@ export default function AIPhotoshoot() {
             <Button 
               className="flex-1 gap-2" 
               onClick={handleGeneratePhotoshoot}
-              disabled={generateMutation.isPending || !uploadedImageId || !selectedTemplate}
+              disabled={isGenerating || !uploadedFile || !selectedTemplate}
             >
-              {generateMutation.isPending || (statusData?.status === "processing") ? (
+              {isGenerating ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  {statusData?.progress ? `Generating ${statusData.progress}%` : "Generating..."}
+                  Generating 3 Views...
                 </>
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
-                  Generate Photoshoot
+                  Generate 3 Views
                 </>
               )}
             </Button>
-            <Button 
-              variant="outline" 
-              size="icon" 
-              onClick={handleDownload}
-              disabled={!generatedImageUrl && !uploadedImage}
-            >
-              <Download className="w-4 h-4" />
-            </Button>
+            {generatedViews.length > 0 && (
+              <Button 
+                variant="outline" 
+                size="icon" 
+                onClick={() => handleDownload()}
+                title="Download all views"
+              >
+                <Download className="w-4 h-4" />
+              </Button>
+            )}
           </div>
+
+          {/* Download individual views */}
+          {generatedViews.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-border/30">
+              <p className="text-xs text-muted-foreground mb-2">Download individual views:</p>
+              <div className="flex flex-wrap gap-2">
+                {generatedViews.map((view) => (
+                  <Button
+                    key={view.view}
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleDownload(view)}
+                    className="gap-2"
+                  >
+                    <Download className="w-3 h-3" />
+                    {view.view}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Export Options */}
           <div className="mt-4 pt-4 border-t border-border/30">
