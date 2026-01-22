@@ -4,9 +4,10 @@ import logging
 import time
 import base64
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+import json
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -119,14 +120,69 @@ def generate_view(cloth_image, reference_person_image, base_prompt, view_name, s
 def get_templates():
     return get_template_database()
 
+async def generate_photoshoot_stream(
+    template_id: str,
+    region: str,
+    skin_tone: str,
+    cloth_part: Image.Image,
+    selected_template: dict
+):
+    """Generator function that yields images as they're generated"""
+    # --- STEP 1: Generate FRONT View (The Master Reference) ---
+    logger.info("Generating View 1: Front (Master)...")
+    front_b64, front_img_obj = generate_view(
+        cloth_image=cloth_part,
+        reference_person_image=None, # No reference for the first one
+        base_prompt=selected_template['prompt'],
+        view_name="Front",
+        skin_tone=skin_tone
+    )
+    
+    if not front_b64:
+        yield f"data: {json.dumps({'status': 'error', 'message': 'Failed to generate primary Front view.'})}\n\n"
+        return
+    
+    # Send Front view immediately
+    yield f"data: {json.dumps({'status': 'progress', 'view': 'Front', 'image': front_b64})}\n\n"
+
+    # --- STEP 2: Generate SIDE View (Using Front as Reference) ---
+    logger.info("Generating View 2: Side (Consistent)...")
+    side_b64, _ = generate_view(
+        cloth_image=cloth_part,
+        reference_person_image=front_img_obj, # <--- PASSING THE GENERATED MODEL
+        base_prompt=selected_template['prompt'],
+        view_name="Side",
+        skin_tone=skin_tone
+    )
+    if side_b64:
+        yield f"data: {json.dumps({'status': 'progress', 'view': 'Side', 'image': side_b64})}\n\n"
+
+    # --- STEP 3: Generate ANGLE View (Using Front as Reference) ---
+    logger.info("Generating View 3: Angle (Consistent)...")
+    angle_b64, _ = generate_view(
+        cloth_image=cloth_part,
+        reference_person_image=front_img_obj, # <--- PASSING THE GENERATED MODEL
+        base_prompt=selected_template['prompt'],
+        view_name="Angle",
+        skin_tone=skin_tone
+    )
+    if angle_b64:
+        yield f"data: {json.dumps({'status': 'progress', 'view': 'Angle', 'image': angle_b64})}\n\n"
+    
+    # Send completion signal
+    yield f"data: {json.dumps({'status': 'completed'})}\n\n"
+
 @app.post("/generate-photoshoot")
 async def generate_photoshoot(
     template_id: str = Form(...),
     region: str = Form(...),
     skin_tone: str = Form(...),
-    cloth_image: UploadFile = File(...)
+    cloth_image: UploadFile = File(...),
+    stream: str = Form("false")  # New parameter for streaming (as string)
 ):
-    logger.info(f"Request: {region} | {template_id} (Consistency Mode)")
+    # Convert string to boolean
+    use_stream = stream.lower() == "true"
+    logger.info(f"Request: {region} | {template_id} (Consistency Mode) | Stream: {use_stream}")
 
     # 1. Get Data
     db = get_template_database()
@@ -145,6 +201,19 @@ async def generate_photoshoot(
     except Exception as e:
         raise HTTPException(status_code=400, detail="Invalid image file")
 
+    # If streaming is requested, use Server-Sent Events
+    if use_stream:
+        return StreamingResponse(
+            generate_photoshoot_stream(template_id, region, skin_tone, cloth_part, selected_template),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"  # Disable buffering for nginx
+            }
+        )
+
+    # Original non-streaming behavior (for backward compatibility)
     generated_results = []
     
     # --- STEP 1: Generate FRONT View (The Master Reference) ---

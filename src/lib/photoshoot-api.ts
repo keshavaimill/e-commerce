@@ -129,7 +129,121 @@ export async function generatePhotoshoot(
 }
 
 /**
+ * Generate photoshoot with streaming support - images arrive as they're generated
+ * @param params - Generation parameters
+ * @param onProgress - Callback function called when each image is generated (with blob URL)
+ * @returns Promise that resolves when all images are generated
+ */
+export async function generatePhotoshootStream(
+  params: GeneratePhotoshootRequest,
+  onProgress: (view: { view: "Front" | "Side" | "Angle"; imageUrl: string }) => void
+): Promise<void> {
+  const url = `${PHOTOSHOOT_BASE_URL}/generate-photoshoot`;
+  
+  const formData = new FormData();
+  formData.append("template_id", params.template_id);
+  formData.append("region", params.region);
+  formData.append("skin_tone", params.skin_tone);
+  formData.append("cloth_image", params.cloth_image);
+  formData.append("stream", "true");
+
+  const res = await fetch(url, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    console.error("Streaming request failed:", res.status, errorText);
+    throw new PhotoshootApiError(
+      `Request failed with status ${res.status}`,
+      res.status,
+      errorText
+    );
+  }
+
+  // Check if response is actually a stream
+  const contentType = res.headers.get("content-type");
+  if (!contentType || !contentType.includes("text/event-stream")) {
+    console.warn("Response is not a stream, content-type:", contentType);
+    throw new PhotoshootApiError("Server did not return a stream", 500);
+  }
+
+  // Handle Server-Sent Events stream
+  const reader = res.body?.getReader();
+  const decoder = new TextDecoder();
+
+  if (!reader) {
+    throw new PhotoshootApiError("Response body is not readable", 500);
+  }
+
+  console.log("Starting to read stream...");
+
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || ""; // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (line.trim() === "") continue; // Skip empty lines
+        
+        if (line.startsWith("data: ")) {
+          try {
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr) continue;
+            
+            const data = JSON.parse(jsonStr);
+            
+            if (data.status === "progress" && data.view && data.image) {
+              console.log(`⚡ Received ${data.view} view - displaying immediately`);
+              
+              // Use base64 data URL directly for INSTANT display (no conversion delay)
+              // Base64 data URLs render immediately in browsers
+              const imageUrl = data.image.startsWith('data:') 
+                ? data.image 
+                : `data:image/png;base64,${data.image}`;
+              
+              // Call progress callback IMMEDIATELY - no async operations
+              onProgress({
+                view: data.view as "Front" | "Side" | "Angle",
+                imageUrl: imageUrl,
+              });
+              
+              console.log(`✅ ${data.view} view sent to UI`);
+            } else if (data.status === "completed") {
+              console.log("Stream completed successfully");
+              return; // All images generated
+            } else if (data.status === "error") {
+              console.error("Stream error:", data.message);
+              throw new PhotoshootApiError(data.message || "Generation failed", 500);
+            }
+          } catch (e) {
+            if (e instanceof PhotoshootApiError) throw e;
+            // Log parsing errors but continue processing
+            console.error("Error parsing SSE data:", e, "Line:", line);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    if (error instanceof PhotoshootApiError) throw error;
+    throw new PhotoshootApiError(
+      error instanceof Error ? error.message : "Stream reading failed",
+      500
+    );
+  }
+}
+
+/**
  * Convert base64 string to blob URL for display
+ * Note: This is different from the one in vto-api.ts - this one is specifically for photoshoot images
  */
 export function base64ToBlobUrl(base64: string, mimeType: string = "image/png"): string | null {
   try {
