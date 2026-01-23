@@ -906,9 +906,9 @@ export default function AIPhotoshoot() {
           </div>
 
       {/* Enhanced Main Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:gap-8">
         {/* Enhanced Template Selector */}
-        <div className="rounded-xl p-6 lg:p-8 border border-border/50 bg-card/50 backdrop-blur-sm shadow-lg animate-fade-in" style={{ animationDelay: '200ms', animationFillMode: 'forwards', animationDuration: '500ms' }}>
+        <div className="lg:col-span-1 rounded-xl p-6 lg:p-8 border border-border/50 bg-card/50 backdrop-blur-sm shadow-lg animate-fade-in" style={{ animationDelay: '200ms', animationFillMode: 'forwards', animationDuration: '500ms' }}>
           <div className="flex items-center gap-3 mb-6">
             <div className="p-2 rounded-lg bg-primary/10">
               <Users className="w-5 h-5 text-primary" />
@@ -1019,8 +1019,8 @@ export default function AIPhotoshoot() {
           </div>
         </div>
 
-        {/* Enhanced Before/After Viewer */}
-        <div className="rounded-xl p-6 lg:p-8 border border-border/50 bg-card/50 backdrop-blur-sm shadow-lg animate-fade-in" style={{ animationDelay: '300ms', animationFillMode: 'forwards', animationDuration: '500ms' }}>
+        {/* Enhanced Before/After Viewer - Centered */}
+        <div className="lg:col-span-2 rounded-xl p-6 lg:p-8 border border-border/50 bg-card/50 backdrop-blur-sm shadow-lg animate-fade-in" style={{ animationDelay: '300ms', animationFillMode: 'forwards', animationDuration: '500ms' }}>
           <div className="flex items-center gap-3 mb-6">
             <div className="p-2 rounded-lg bg-primary/10">
               <Camera className="w-5 h-5 text-primary" />
@@ -1038,8 +1038,8 @@ export default function AIPhotoshoot() {
 
           <div 
             className={cn(
-              // Larger, more prominent preview while maintaining aspect ratio
-              "aspect-[16/10] min-h-[420px] lg:min-h-[520px] rounded-xl mb-4 flex items-center justify-center border-2 border-dashed border-border/50 relative overflow-hidden transition-all duration-300",
+              // Larger, more prominent preview while maintaining aspect ratio - centered
+              "aspect-[16/10] min-h-[420px] lg:min-h-[600px] rounded-xl mb-4 flex items-center justify-center border-2 border-dashed border-border/50 relative overflow-hidden transition-all duration-300 mx-auto",
               // Subtle background only when empty/loading
               (!uploadedImage && generatedViews.length === 0) && "bg-gradient-to-br from-sand-50 to-sand-100 cursor-pointer hover:border-primary/50 hover:bg-primary/5",
               (uploadedImage || generatedViews.length > 0) && "bg-muted/10"
