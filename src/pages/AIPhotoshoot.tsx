@@ -194,6 +194,7 @@ export default function AIPhotoshoot() {
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [generatedViews, setGeneratedViews] = useState<GeneratedView[]>([]);
+  const [activeViewIndex, setActiveViewIndex] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
   const [photoshootExpandedImageUrl, setPhotoshootExpandedImageUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -399,6 +400,7 @@ export default function AIPhotoshoot() {
           };
         });
         setGeneratedViews(views);
+        setActiveViewIndex(0); // Reset to first view
         setIsGenerating(false);
         toast({
           title: "Photoshoot Generated!",
@@ -596,6 +598,7 @@ export default function AIPhotoshoot() {
     setUploadedFileName(null);
     setUploadedFile(null);
     setGeneratedViews([]);
+    setActiveViewIndex(0); // Reset view index
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -925,17 +928,17 @@ export default function AIPhotoshoot() {
   }, [vtoGeneratedImageUrl]);
 
   return (
-    <div className="h-screen overflow-hidden bg-gradient-to-br from-background via-background to-muted/20 flex flex-col">
-      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-4 max-w-[1920px] mx-auto w-full">
+    <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/20 flex flex-col">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-6 space-y-3 sm:space-y-4 max-w-[1920px] mx-auto w-full">
         {/* Enhanced Header */}
         <div className="space-y-2">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div className="flex items-center gap-2">
               <div className="p-1.5 rounded-lg bg-gradient-to-br from-ai/10 to-ai/5 border border-ai/20">
                 <Camera className="w-4 h-4 text-ai" />
               </div>
               <div>
-                <h1 className="text-xl lg:text-2xl font-bold text-foreground tracking-tight">
+                <h1 className="text-lg sm:text-xl lg:text-2xl font-bold text-foreground tracking-tight">
                   AI Image Generation
                 </h1>
                 <p className="text-xs text-muted-foreground">
@@ -943,7 +946,7 @@ export default function AIPhotoshoot() {
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <Badge className="bg-gradient-to-w from-ai/10 to-ai/5 text-ai border-ai/20 px-2 py-0.5 text-[10px]">
                 <Sparkles className="w-3 h-3 mr-1" />
                 AI Powered
@@ -992,54 +995,46 @@ export default function AIPhotoshoot() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="photoshoot" className="space-y-4 mt-0">
-          {/* Enhanced KPI Row */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-1.5">
+        <TabsContent value="photoshoot" className="space-y-3 mt-0">
+          {/* KPI Row - Fills available width */}
+          <div className="hidden sm:block space-y-2">
+            <div className="flex items-center gap-2">
               <BarChart3 className="w-4 h-4 text-primary" />
-              <h2 className="text-base font-semibold text-foreground">Performance Metrics</h2>
+              <h2 className="text-sm font-semibold text-foreground">Performance Metrics</h2>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-3">
+            <div className="grid grid-cols-5 gap-3">
               {kpisLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="h-28 rounded-xl bg-muted/50 animate-pulse border border-border/50" />
+                  <div key={i} className="h-24 rounded-xl bg-muted/50 animate-pulse border border-border/50" />
                 ))
               ) : (
-                kpis.map((kpi, index) => {
+                kpis.map((kpi) => {
                   const Icon = iconMap[kpi.icon] || Camera;
                   return (
                     <div 
                       key={kpi.label}
                       className={cn(
-                        "rounded-xl p-5 border-2 transition-all duration-300 hover:shadow-lg hover:scale-[1.02]",
-                        "bg-gradient-to-br from-card/50 to-card/30 border-border/50 backdrop-blur-sm",
-                        "animate-fade-in"
+                        "rounded-xl p-4 border transition-all duration-300 hover:shadow-md",
+                        "bg-gradient-to-br from-card/50 to-card/30 border-border/50 backdrop-blur-sm"
                       )}
-                      style={{ 
-                        animationDelay: `${index * 50}ms`, 
-                        animationFillMode: 'forwards',
-                        animationDuration: '400ms'
-                      }}
                     >
-                      <div className="flex items-center gap-2 mb-3">
-                        <div className="p-2 rounded-lg bg-primary/10">
-                          <Icon className="w-4 h-4 text-primary" />
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="p-1.5 rounded-lg bg-primary/10">
+                          <Icon className="w-3.5 h-3.5 text-primary" />
                         </div>
-                        <span className="text-xs font-medium text-muted-foreground">{kpi.label}</span>
+                        <span className="text-xs font-medium text-muted-foreground truncate">{kpi.label}</span>
                       </div>
                       <div className="flex items-baseline gap-2">
-                        <span className="text-2xl font-bold text-foreground">{kpi.value}</span>
-                        <div className="flex items-center gap-1.5">
-                          <Badge 
-                            variant="secondary" 
-                            className={cn(
-                              "text-xs font-semibold",
-                              kpi.change > 0 ? "bg-success/10 text-success border-success/20" : "bg-destructive/10 text-destructive border-destructive/20"
-                            )}
-                          >
-                            {kpi.change > 0 ? '+' : ''}{kpi.change}%
-                          </Badge>
-                        </div>
+                        <span className="text-xl font-bold text-foreground">{kpi.value}</span>
+                        <Badge 
+                          variant="secondary" 
+                          className={cn(
+                            "text-[10px] px-1.5 py-0.5",
+                            kpi.change > 0 ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"
+                          )}
+                        >
+                          {kpi.change > 0 ? '+' : ''}{kpi.change}%
+                        </Badge>
                       </div>
                     </div>
                   );
@@ -1048,114 +1043,89 @@ export default function AIPhotoshoot() {
             </div>
           </div>
 
-      {/* Enhanced Main Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:gap-8">
-        {/* Enhanced Template Selector */}
-        <div className="lg:col-span-1 rounded-xl p-6 lg:p-8 border border-border/50 bg-card/50 backdrop-blur-sm shadow-lg animate-fade-in" style={{ animationDelay: '200ms', animationFillMode: 'forwards', animationDuration: '500ms' }}>
-          <div className="flex items-center gap-3 mb-6">
-            <div className="p-2 rounded-lg bg-primary/10">
-              <Users className="w-5 h-5 text-primary" />
+      {/* Main Content - Balanced layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-9 gap-4 lg:gap-5">
+        {/* Model Style Section - 4 of 9 columns (~44%) */}
+        <div className="lg:col-span-4 rounded-xl p-3 sm:p-4 lg:p-5 border border-border/50 bg-card/50 backdrop-blur-sm shadow-lg">
+          <div className="flex items-center gap-2 mb-3 sm:mb-4">
+            <div className="p-1.5 rounded-lg bg-primary/10">
+              <Users className="w-4 h-4 text-primary" />
             </div>
-            <h3 className="text-lg font-semibold text-foreground">Model Style Selection</h3>
+            <h3 className="text-sm sm:text-base font-semibold text-foreground">Model Style</h3>
           </div>
           
           <Tabs value={activeRegion} onValueChange={(value) => setActiveRegion(value as "indian" | "southAfrican" | "global")}>
-            <TabsList className="w-full grid grid-cols-3 mb-4 h-10 bg-muted/50 border border-border/50 rounded-lg p-1">
+            <TabsList className="w-full grid grid-cols-3 mb-3 h-8 bg-muted/50 border border-border/50 rounded-lg p-0.5">
               <TabsTrigger
                 value="indian"
-                className={cn(
-                  "relative transition-all duration-300 text-xs font-medium",
-                  "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md",
-                  "data-[state=active]:scale-[1.05] data-[state=inactive]:text-muted-foreground",
-                  "hover:bg-primary/10 hover:text-foreground"
-                )}
+                className="text-[10px] sm:text-xs font-medium data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
               >
                 🇮🇳 Indian
               </TabsTrigger>
               <TabsTrigger
                 value="southAfrican"
-                className={cn(
-                  "relative transition-all duration-300 text-xs font-medium",
-                  "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md",
-                  "data-[state=active]:scale-[1.05] data-[state=inactive]:text-muted-foreground",
-                  "hover:bg-primary/10 hover:text-foreground"
-                )}
+                className="text-[10px] sm:text-xs font-medium data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
               >
-                🇿🇦 South African
+                🇿🇦 SA
               </TabsTrigger>
               <TabsTrigger
                 value="global"
-                className={cn(
-                  "relative transition-all duration-300 text-xs font-medium",
-                  "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md",
-                  "data-[state=active]:scale-[1.05] data-[state=inactive]:text-muted-foreground",
-                  "hover:bg-primary/10 hover:text-foreground"
-                )}
+                className="text-[10px] sm:text-xs font-medium data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
               >
                 🌍 Global
               </TabsTrigger>
             </TabsList>
 
             {templatesLoading ? (
-              <div className="flex items-center justify-center py-8">
+              <div className="flex items-center justify-center py-4">
                 <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
               </div>
             ) : templatesData ? (
               Object.entries(templatesData).map(([region, items]) => (
                 <TabsContent key={region} value={region} className="mt-0">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-2 gap-2 max-h-[280px] md:max-h-[320px] lg:max-h-none overflow-y-auto pr-1">
                     {items.map((template) => (
                     <div
                       key={template.id}
                       onClick={() => setSelectedTemplate(String(template.id))}
                       className={cn(
-                        "p-4 rounded-xl border cursor-pointer transition-all duration-300 group",
-                        "hover:border-primary/50 hover:bg-primary/5 hover:shadow-lg",
+                        "p-2 sm:p-3 rounded-lg border cursor-pointer transition-all duration-200 group",
+                        "hover:border-primary/50 hover:bg-primary/5",
                         selectedTemplate === String(template.id)
-                          ? "border-primary bg-primary/10 shadow-lg" 
-                          : "border-border/50 shadow-sm"
+                          ? "border-primary bg-primary/10 ring-1 ring-primary/30" 
+                          : "border-border/50"
                       )}
                     >
-                      <div className="aspect-square bg-muted/30 rounded-lg mb-3 overflow-hidden relative flex items-center justify-center">
+                      <div className="aspect-[4/5] bg-muted/30 rounded-md mb-2 overflow-hidden relative flex items-center justify-center">
                         {template.previewUrl ? (
                           <img 
                             src={template.previewUrl} 
                             alt={template.name}
-                            className="max-w-full max-h-full w-auto h-auto object-contain"
+                            className="w-full h-full object-contain"
                             loading="lazy"
                             onError={(e) => {
-                              console.error(`❌ Failed to load template image for ${template.name}:`, template.previewUrl);
                               const target = e.target as HTMLImageElement;
                               const parent = target.parentElement;
                               if (parent) {
                                 parent.innerHTML = `
-                                  <div class="w-full h-full flex flex-col items-center justify-center gap-2 bg-muted/50">
-                                    <svg class="w-8 h-8 text-muted-foreground/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <div class="w-full h-full flex items-center justify-center bg-muted/50">
+                                    <svg class="w-6 h-6 text-muted-foreground/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
                                     </svg>
-                                    <span class="text-[10px] text-muted-foreground/60 text-center px-2">Image not found</span>
                                   </div>
                                 `;
                               }
                             }}
-                            onLoad={() => {
-                              console.log(`✅ Successfully loaded: ${template.name} from ${template.previewUrl}`);
-                            }}
                           />
                         ) : (
-                          <div className="w-full h-full flex flex-col items-center justify-center gap-2">
-                            <Camera className="w-8 h-8 text-muted-foreground/40" />
-                            <span className="text-[10px] text-muted-foreground/60">No preview URL</span>
+                          <div className="w-full h-full flex items-center justify-center">
+                            <Camera className="w-6 h-6 text-muted-foreground/40" />
                           </div>
                         )}
                       </div>
-                      <div className="space-y-1.5">
-                        <h4 className="font-semibold text-foreground text-sm">{template.name}</h4>
-                        <Badge variant="secondary" className="text-xs font-medium">
-                          {typeof template.uses === 'number' 
-                            ? template.uses.toLocaleString() 
-                            : template.uses} uses
-                        </Badge>
+                      <div className="space-y-0.5">
+                        <h4 className="font-medium text-foreground text-xs sm:text-sm truncate">{template.name}</h4>
+                        <span className="text-[10px] text-muted-foreground">{typeof template.uses === 'number' ? template.uses.toLocaleString() : template.uses} uses</span>
                       </div>
                     </div>
                     ))}
@@ -1188,10 +1158,10 @@ export default function AIPhotoshoot() {
             ) : null}
           </Tabs>
 
-          {/* Skin Tone Selector */}
-          <div className="mt-6 pt-4 border-t border-border/30">
-            <h4 className="text-sm font-medium text-foreground mb-3">Skin Tone</h4>
-            <div className="flex gap-2">
+          {/* Skin Tone Selector - Compact */}
+          <div className="mt-3 pt-3 border-t border-border/30">
+            <h4 className="text-xs font-medium text-foreground mb-2">Skin Tone</h4>
+            <div className="flex gap-1.5 flex-wrap">
               {[
                 { color: '#f5d0c5', label: 'Fair' },
                 { color: '#e8b89a', label: 'Light' },
@@ -1204,7 +1174,7 @@ export default function AIPhotoshoot() {
                   key={tone.color}
                   onClick={() => setSelectedSkinTone(tone.label)}
                   className={cn(
-                    "w-8 h-8 rounded-full border-2 transition-colors",
+                    "w-6 h-6 sm:w-7 sm:h-7 rounded-full border-2 transition-colors",
                     selectedSkinTone === tone.label
                       ? "border-primary ring-2 ring-primary/20" 
                       : "border-border hover:border-primary"
@@ -1215,18 +1185,18 @@ export default function AIPhotoshoot() {
               ))}
             </div>
             {selectedSkinTone && (
-              <p className="text-xs text-muted-foreground mt-2">Selected: {selectedSkinTone}</p>
+              <p className="text-[10px] text-muted-foreground mt-1.5">Selected: {selectedSkinTone}</p>
             )}
           </div>
         </div>
 
-        {/* Enhanced Before/After Viewer - Centered */}
-        <div className="lg:col-span-2 rounded-xl p-6 lg:p-8 border border-border/50 bg-card/50 backdrop-blur-sm shadow-lg animate-fade-in" style={{ animationDelay: '300ms', animationFillMode: 'forwards', animationDuration: '500ms' }}>
-          <div className="flex items-center gap-3 mb-6">
-            <div className="p-2 rounded-lg bg-primary/10">
-              <Camera className="w-5 h-5 text-primary" />
+        {/* Image Preview - 5 of 9 columns (~56%) */}
+        <div className="lg:col-span-5 rounded-xl p-3 sm:p-4 border border-border/50 bg-card/50 backdrop-blur-sm shadow-lg">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="p-1.5 rounded-lg bg-primary/10">
+              <Camera className="w-4 h-4 text-primary" />
             </div>
-            <h3 className="text-lg font-semibold text-foreground">Image Preview</h3>
+            <h3 className="text-sm sm:text-base font-semibold text-foreground">Image Preview</h3>
           </div>
           
           <input
@@ -1239,8 +1209,8 @@ export default function AIPhotoshoot() {
 
           <div 
             className={cn(
-              // Larger, more prominent preview while maintaining aspect ratio - centered
-              "aspect-[16/10] min-h-[420px] lg:min-h-[600px] rounded-xl mb-4 flex items-center justify-center border-2 border-dashed border-border/50 relative overflow-hidden transition-all duration-300 mx-auto",
+              // Responsive preview container
+              "aspect-[4/3] md:aspect-[16/10] min-h-[250px] md:min-h-[300px] lg:min-h-[400px] rounded-xl mb-3 flex items-center justify-center border-2 border-dashed border-border/50 relative overflow-hidden transition-all duration-300 w-full",
               // Subtle background only when empty/loading
               (!uploadedImage && generatedViews.length === 0) && "bg-gradient-to-br from-sand-50 to-sand-100 cursor-pointer hover:border-primary/50 hover:bg-primary/5",
               (uploadedImage || generatedViews.length > 0) && "bg-muted/10"
@@ -1262,92 +1232,52 @@ export default function AIPhotoshoot() {
                 <Progress value={undefined} className="w-2/3 h-1.5" />
               </div>
             ) : generatedViews.length > 0 ? (
-              <div className="relative w-full h-full flex flex-col p-3">
-                <Tabs defaultValue={generatedViews[0]?.view} className="w-full h-full flex flex-col">
-                  <TabsList className="grid w-full grid-cols-3 mb-3 h-9 bg-background/95 backdrop-blur-sm border border-border/50 rounded-lg p-1 shrink-0">
-                    {generatedViews.map((view) => (
-                      <TabsTrigger
+              <div className="relative w-full h-full group flex items-center justify-center">
+                {/* Main image */}
+                <img 
+                  src={generatedViews[activeViewIndex]?.imageUrl} 
+                  alt={`${generatedViews[activeViewIndex]?.view} view`}
+                  className="max-w-full max-h-full object-contain rounded-lg cursor-pointer"
+                  onClick={() => setPhotoshootExpandedImageUrl(generatedViews[activeViewIndex]?.imageUrl)}
+                  onError={(e) => {
+                    console.error(`Failed to load view`);
+                    (e.target as HTMLImageElement).style.opacity = '0.3';
+                  }}
+                />
+
+                {/* View selector pills at bottom */}
+                {generatedViews.length > 1 && (
+                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex gap-1 bg-black/60 backdrop-blur-sm rounded-full p-1">
+                    {generatedViews.map((view, idx) => (
+                      <button
                         key={view.view}
-                        value={view.view}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveViewIndex(idx);
+                        }}
                         className={cn(
-                          "relative transition-all duration-300 text-xs font-medium py-1.5",
-                          "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md",
-                          "data-[state=active]:scale-[1.05] data-[state=inactive]:text-muted-foreground",
-                          "hover:bg-primary/10 hover:text-foreground",
-                          "flex items-center justify-center gap-1.5"
+                          "px-3 py-1 text-[10px] font-medium rounded-full transition-all",
+                          activeViewIndex === idx 
+                            ? "bg-white text-black" 
+                            : "text-white/80 hover:text-white hover:bg-white/20"
                         )}
                       >
-                        {view.view === "Front" && <Camera className="w-3 h-3" />}
-                        {view.view === "Side" && <ArrowRight className="w-3 h-3 rotate-90" />}
-                        {view.view === "Angle" && <Zap className="w-3 h-3" />}
                         {view.view}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
-                  <div className="flex-1 min-h-0 overflow-auto">
-                    {generatedViews.map((view) => (
-                      <TabsContent key={view.view} value={view.view} className="mt-0 h-full flex items-center justify-center p-2">
-                        <div className="relative w-full h-full flex items-center justify-center bg-muted/30 rounded-xl p-4 group" style={{ minHeight: '400px' }}>
-                          <button
-                            type="button"
-                            className="w-full h-full rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 transition-transform hover:scale-[1.02] flex items-center justify-center"
-                            onClick={() => setPhotoshootExpandedImageUrl(view.imageUrl)}
-                            aria-label={`Expand ${view.view} view`}
-                          >
-                            <img 
-                              src={view.imageUrl} 
-                              alt={`${view.view} view`}
-                              className="max-w-full max-h-full w-auto h-auto object-contain rounded-lg shadow-lg"
-                              loading="eager"
-                              decoding="async"
-                              fetchPriority="high"
-                              style={{ 
-                                maxHeight: 'calc(100% - 2rem)', 
-                                maxWidth: 'calc(100% - 2rem)',
-                                display: 'block'
-                              }}
-                              onError={(e) => {
-                                console.error(`Failed to load ${view.view} view:`, view.imageUrl?.substring(0, 50));
-                                const target = e.target as HTMLImageElement;
-                                const parent = target.parentElement?.parentElement;
-                                if (parent) {
-                                  parent.innerHTML = `
-                                    <div class="flex flex-col items-center justify-center text-center p-4 w-full h-full">
-                                      <AlertCircle class="w-8 h-8 text-destructive mb-2" />
-                                      <p class="text-sm text-destructive">Failed to load image</p>
-                                      <p class="text-xs text-muted-foreground mt-1">Check console for details</p>
-                                    </div>
-                                  `;
-                                }
-                              }}
-                              onLoad={() => {
-                                console.log(`Successfully loaded ${view.view} view`);
-                              }}
-                            />
-                          </button>
-                          {isGenerating && (
-                            <div className="absolute top-2 left-2 bg-primary/90 text-primary-foreground text-[10px] px-2 py-1 rounded z-10">
-                              {generatedViews.length}/3
-                            </div>
-                          )}
-                          <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                            <Button
-                              variant="destructive"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleRemoveImage();
-                              }}
-                            >
-                              <X className="w-3 h-3" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
+                      </button>
                     ))}
                   </div>
-                </Tabs>
+                )}
+
+                {/* Remove button */}
+                <button
+                  className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-destructive text-destructive-foreground rounded-full p-1.5 hover:bg-destructive/90"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRemoveImage();
+                  }}
+                >
+                  <X className="w-3 h-3" />
+                </button>
               </div>
             ) : uploadedImage ? (
               <div className="relative w-full h-full p-3 flex items-center justify-center group">
@@ -1378,11 +1308,11 @@ export default function AIPhotoshoot() {
                 )}
               </div>
             ) : (
-              <div className="text-center">
-                <Upload className="w-12 h-12 text-sand-400 mx-auto mb-3" />
+              <div className="text-center py-4">
+                <Upload className="w-10 h-10 text-muted-foreground/50 mx-auto mb-2" />
                 <p className="text-sm text-muted-foreground">Upload product image</p>
-                <p className="text-xs text-muted-foreground mt-1">or drag and drop</p>
-                <Button size="sm" variant="outline" className="mt-3" onClick={handleBrowseFiles}>
+                <p className="text-[10px] text-muted-foreground/70 mt-0.5">or drag and drop</p>
+                <Button size="sm" variant="outline" className="mt-2 h-7 text-xs" onClick={handleBrowseFiles}>
                   Browse Files
                 </Button>
               </div>
@@ -1397,25 +1327,22 @@ export default function AIPhotoshoot() {
             />
           )}
 
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          {/* Compact action bar */}
+          <div className="flex items-center justify-between mb-2 gap-2">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <span>Original</span>
-              <ArrowRight className="w-4 h-4" />
+              <ArrowRight className="w-3 h-3" />
               <span className="text-foreground font-medium">AI Generated</span>
             </div>
             <Button 
               size="sm" 
               variant="ghost" 
-              className="gap-1" 
+              className="gap-1 h-7 text-xs px-2" 
               onClick={handleRegenerate}
               disabled={isGenerating || !uploadedFile}
             >
-              {isGenerating ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <RefreshCw className="w-4 h-4" />
-              )}
-              Regenerate
+              <RefreshCw className="w-3 h-3" />
+              <span className="hidden sm:inline">Regenerate</span>
             </Button>
           </div>
 
@@ -1427,8 +1354,9 @@ export default function AIPhotoshoot() {
             >
               {isGenerating ? (
                 <>
-                  <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                  Generating...
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span className="hidden sm:inline">Generating...</span>
+                  <span className="sm:hidden">...</span>
                 </>
               ) : (
                 <>
@@ -1440,11 +1368,12 @@ export default function AIPhotoshoot() {
             {generatedViews.length > 0 && (
               <Button 
                 variant="outline" 
-                size="icon" 
+                size="icon"
+                className="h-8 w-8"
                 onClick={() => handleDownload()}
                 title="Download all views"
               >
-                <Download className="w-4 h-4" />
+                <Download className="w-3 h-3" />
               </Button>
             )}
           </div>
