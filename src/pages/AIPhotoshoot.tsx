@@ -234,7 +234,17 @@ export default function AIPhotoshoot() {
   // Fetch templates from real backend
   const { data: backendTemplatesData, isLoading: templatesLoading, error: templatesError } = useQuery<BackendPhotoshootTemplatesResponse>({
     queryKey: ["photoshoot", "templates"],
-    queryFn: () => getPhotoshootTemplates(),
+    queryFn: async () => {
+      const data = await getPhotoshootTemplates();
+      console.log("Fetched templates data:", data);
+      // Log image URLs for debugging
+      Object.entries(data).forEach(([region, templates]) => {
+        templates.forEach(t => {
+          console.log(`Template ${t.name} (${region}): ${t.img}`);
+        });
+      });
+      return data;
+    },
     retry: 2,
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
   });
@@ -242,6 +252,10 @@ export default function AIPhotoshoot() {
   // Transform backend templates to frontend format
   const templatesData = useMemo<PhotoshootTemplatesResponse | null>(() => {
     if (!backendTemplatesData) return null;
+    
+    // Get base URL from environment or use default
+    const photoshootBaseUrl = import.meta.env.VITE_PHOTOSHOOT_API_URL ?? "https://ai-photoshoot-f9qy.onrender.com";
+    console.log("Using photoshoot base URL:", photoshootBaseUrl);
     
     // Map region names: backend uses "Indian", "South African", "Global"
     const regionMap: Record<string, keyof BackendPhotoshootTemplatesResponse> = {
@@ -251,33 +265,57 @@ export default function AIPhotoshoot() {
     };
 
     const transformTemplate = (template: BackendPhotoshootTemplate): PhotoshootTemplate => {
-      // Fix image URLs: replace localhost:8000 with Render backend URL
-      const photoshootBaseUrl = import.meta.env.VITE_PHOTOSHOOT_API_URL ?? "https://ai-photoshoot-f9qy.onrender.com";
-      let imageUrl = template.img;
+      let imageUrl = template.img || '';
       
-      // Replace localhost URLs with Render backend URL
-      if (imageUrl.includes('localhost:8000')) {
-        imageUrl = imageUrl.replace('http://localhost:8000', photoshootBaseUrl);
-      }
-      // If URL is relative, make it absolute
-      else if (imageUrl.startsWith('/static/')) {
-        imageUrl = `${photoshootBaseUrl}${imageUrl}`;
+      // Handle different URL formats from backend
+      if (imageUrl && typeof imageUrl === 'string' && imageUrl.trim()) {
+        // Replace any localhost:8000 with configured base URL
+        if (imageUrl.includes('localhost:8000')) {
+          imageUrl = imageUrl.replace(/http:\/\/localhost:8000/g, photoshootBaseUrl);
+          console.log(`[Template ${template.name}] Transformed localhost URL: ${template.img} -> ${imageUrl}`);
+        } 
+        // If URL starts with /static/, prepend base URL
+        else if (imageUrl.startsWith('/static/')) {
+          imageUrl = `${photoshootBaseUrl}${imageUrl}`;
+          console.log(`[Template ${template.name}] Transformed relative static URL: ${template.img} -> ${imageUrl}`);
+        } 
+        // If it's a relative path without leading slash
+        else if (!imageUrl.startsWith('http')) {
+          imageUrl = imageUrl.startsWith('/') 
+            ? `${photoshootBaseUrl}${imageUrl}`
+            : `${photoshootBaseUrl}/static/templates/${imageUrl}`;
+          console.log(`[Template ${template.name}] Transformed relative URL: ${template.img} -> ${imageUrl}`);
+        }
+        // If already a full URL, use as-is but ensure it's valid
+        else {
+          console.log(`[Template ${template.name}] Using existing full URL: ${imageUrl}`);
+        }
+      } else {
+        // Fallback if imageUrl is missing or invalid
+        console.warn(`⚠️ Template "${template.name}" has invalid or missing image URL:`, imageUrl);
+        imageUrl = '';
       }
       
-      return {
+      const result = {
         id: template.id,
         name: template.name,
         uses: parseInt(template.uses.replace(/[^\d]/g, "")) || 0,
         image: imageUrl,
         previewUrl: imageUrl,
       };
+      
+      console.log(`📸 Template "${template.name}" final image URL:`, result.previewUrl);
+      return result;
     };
 
-    return {
+    const transformed = {
       indian: (backendTemplatesData.Indian || []).map(transformTemplate),
       southAfrican: (backendTemplatesData["South African"] || []).map(transformTemplate),
       global: (backendTemplatesData.Global || []).map(transformTemplate),
     };
+    
+    console.log("Transformed templates:", transformed);
+    return transformed;
   }, [backendTemplatesData]);
 
   // Fetch cost analysis
@@ -327,6 +365,10 @@ export default function AIPhotoshoot() {
 
       const backendRegion = regionMap[activeRegion] || "Global";
 
+      // Clear previous views and set generating state
+      setGeneratedViews([]);
+      setIsGenerating(true);
+
       return generatePhotoshoot({
         template_id: selectedTemplate,
         region: backendRegion,
@@ -336,12 +378,24 @@ export default function AIPhotoshoot() {
     },
     onSuccess: (data) => {
       if (data.status === "success" && data.images) {
-        // Convert base64 images to blob URLs
+        // Convert base64 images to display URLs
         const views: GeneratedView[] = data.images.map((img) => {
-          const blobUrl = photoshootBase64ToBlobUrl(img.image);
+          // Clean base64 string - remove data URL prefix if present
+          let base64String = img.image;
+          if (base64String.startsWith('data:image')) {
+            // Extract just the base64 part
+            base64String = base64String.split(',')[1] || base64String;
+          }
+          
+          // Create data URL for instant display
+          const base64Url = `data:image/png;base64,${base64String}`;
+          
+          // Try to convert to blob URL for better memory management (optional)
+          const blobUrl = photoshootBase64ToBlobUrl(base64String);
+          
           return {
             view: img.view,
-            imageUrl: blobUrl || `data:image/png;base64,${img.image}`,
+            imageUrl: blobUrl || base64Url,
           };
         });
         setGeneratedViews(views);
@@ -349,8 +403,10 @@ export default function AIPhotoshoot() {
         toast({
           title: "Photoshoot Generated!",
           description: `Successfully generated ${views.length} views (Front, Side, Angle)`,
+          duration: 3000,
         });
       } else {
+        setIsGenerating(false);
         throw new Error(data.error || "Failed to generate photoshoot");
       }
     },
@@ -359,10 +415,19 @@ export default function AIPhotoshoot() {
       const errorMessage = error instanceof PhotoshootApiError 
         ? error.detail || error.message 
         : error.message;
+      
+      // Check if it's a connection error
+      const isConnectionError = errorMessage.includes("fetch") || 
+                                errorMessage.includes("network") ||
+                                errorMessage.includes("Failed to fetch");
+      
       toast({
         title: "Generation failed",
-        description: errorMessage || "Failed to generate photoshoot. Please try again.",
+        description: isConnectionError 
+          ? "Could not connect to backend. Make sure the server is running."
+          : errorMessage || "Failed to generate photoshoot. Please try again.",
         variant: "destructive",
+        duration: 5000,
       });
     },
   });
@@ -860,54 +925,81 @@ export default function AIPhotoshoot() {
   }, [vtoGeneratedImageUrl]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/20">
-      <div className="p-4 lg:p-8 space-y-8 max-w-[1920px] mx-auto">
+    <div className="h-screen overflow-hidden bg-gradient-to-br from-background via-background to-muted/20 flex flex-col">
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-4 max-w-[1920px] mx-auto w-full">
         {/* Enhanced Header */}
-        <div className="space-y-3">
+        <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-gradient-to-br from-ai/10 to-ai/5 border border-ai/20">
-                <Camera className="w-6 h-6 text-ai" />
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-gradient-to-br from-ai/10 to-ai/5 border border-ai/20">
+                <Camera className="w-4 h-4 text-ai" />
               </div>
               <div>
-                <h1 className="text-3xl lg:text-4xl font-bold text-foreground tracking-tight">
+                <h1 className="text-xl lg:text-2xl font-bold text-foreground tracking-tight">
                   AI Image Generation
                 </h1>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Generate professional product imagery and virtual try-ons with AI
+                <p className="text-xs text-muted-foreground">
+                  Generate professional product imagery with AI
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <Badge className="bg-gradient-to-w from-ai/10 to-ai/5 text-ai border-ai/20 px-3 py-1.5">
-                <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+            <div className="flex items-center gap-1.5">
+              <Badge className="bg-gradient-to-w from-ai/10 to-ai/5 text-ai border-ai/20 px-2 py-0.5 text-[10px]">
+                <Sparkles className="w-3 h-3 mr-1" />
                 AI Powered
               </Badge>
-              {kpisData && (
-                <Badge className="bg-success/10 text-success border-success/20 px-3 py-1.5">
-                  <CheckCircle className="w-3.5 h-3.5 mr-1.5" />
-                  API Connected
+              {templatesError ? (
+                <Badge className="bg-destructive/10 text-destructive border-destructive/20 px-2 py-0.5 text-[10px]">
+                  <AlertCircle className="w-3 h-3 mr-1" />
+                  Backend Offline
                 </Badge>
-              )}
+              ) : backendTemplatesData ? (
+                <Badge className="bg-success/10 text-success border-success/20 px-2 py-0.5 text-[10px]">
+                  <CheckCircle className="w-3 h-3 mr-1" />
+                  Connected
+                </Badge>
+              ) : null}
             </div>
           </div>
         </div>
 
       {/* Enhanced Main Tabs */}
-      <Tabs defaultValue="photoshoot" className="space-y-8">
-        <TabsList className="w-full grid grid-cols-2 max-w-md h-12 bg-muted/50 border border-border/50">
-          <TabsTrigger value="photoshoot" className="data-[state=active]:bg-background data-[state=active]:shadow-sm transition-all">AI Photoshoot</TabsTrigger>
-          <TabsTrigger value="tryon" className="data-[state=active]:bg-background data-[state=active]:shadow-sm transition-all">Virtual Try-On</TabsTrigger>
+      <Tabs defaultValue="photoshoot" className="space-y-4">
+        <TabsList className="w-full grid grid-cols-2 max-w-md h-12 bg-muted/50 border border-border/50 rounded-lg p-1 relative">
+          <TabsTrigger
+            value="photoshoot"
+            className={cn(
+              "relative z-10 transition-all duration-300 font-medium",
+              "data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-md",
+              "data-[state=active]:scale-[1.02] data-[state=inactive]:text-muted-foreground",
+              "hover:bg-background/50 hover:text-foreground"
+            )}
+          >
+            <Camera className="w-4 h-4 mr-2 inline" />
+            AI Photoshoot
+          </TabsTrigger>
+          <TabsTrigger
+            value="tryon"
+            className={cn(
+              "relative z-10 transition-all duration-300 font-medium",
+              "data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-md",
+              "data-[state=active]:scale-[1.02] data-[state=inactive]:text-muted-foreground",
+              "hover:bg-background/50 hover:text-foreground"
+            )}
+          >
+            <User className="w-4 h-4 mr-2 inline" />
+            Virtual Try-On
+          </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="photoshoot" className="space-y-8 mt-0">
+        <TabsContent value="photoshoot" className="space-y-4 mt-0">
           {/* Enhanced KPI Row */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <BarChart3 className="w-5 h-5 text-primary" />
-              <h2 className="text-xl font-semibold text-foreground">Performance Metrics</h2>
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
+              <BarChart3 className="w-4 h-4 text-primary" />
+              <h2 className="text-base font-semibold text-foreground">Performance Metrics</h2>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-3">
               {kpisLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <div key={i} className="h-28 rounded-xl bg-muted/50 animate-pulse border border-border/50" />
@@ -967,11 +1059,41 @@ export default function AIPhotoshoot() {
             <h3 className="text-lg font-semibold text-foreground">Model Style Selection</h3>
           </div>
           
-          <Tabs value={activeRegion} onValueChange={(value) => setActiveRegion(value as typeof activeRegion)}>
-            <TabsList className="w-full grid grid-cols-3 mb-6 h-11 bg-muted/50 border border-border/50">
-              <TabsTrigger value="indian" className="data-[state=active]:bg-background data-[state=active]:shadow-sm transition-all">🇮🇳 Indian</TabsTrigger>
-              <TabsTrigger value="southAfrican" className="data-[state=active]:bg-background data-[state=active]:shadow-sm transition-all">🇿🇦 South African</TabsTrigger>
-              <TabsTrigger value="global" className="data-[state=active]:bg-background data-[state=active]:shadow-sm transition-all">🌍 Global</TabsTrigger>
+          <Tabs value={activeRegion} onValueChange={(value) => setActiveRegion(value as "indian" | "southAfrican" | "global")}>
+            <TabsList className="w-full grid grid-cols-3 mb-4 h-10 bg-muted/50 border border-border/50 rounded-lg p-1">
+              <TabsTrigger
+                value="indian"
+                className={cn(
+                  "relative transition-all duration-300 text-xs font-medium",
+                  "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md",
+                  "data-[state=active]:scale-[1.05] data-[state=inactive]:text-muted-foreground",
+                  "hover:bg-primary/10 hover:text-foreground"
+                )}
+              >
+                🇮🇳 Indian
+              </TabsTrigger>
+              <TabsTrigger
+                value="southAfrican"
+                className={cn(
+                  "relative transition-all duration-300 text-xs font-medium",
+                  "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md",
+                  "data-[state=active]:scale-[1.05] data-[state=inactive]:text-muted-foreground",
+                  "hover:bg-primary/10 hover:text-foreground"
+                )}
+              >
+                🇿🇦 South African
+              </TabsTrigger>
+              <TabsTrigger
+                value="global"
+                className={cn(
+                  "relative transition-all duration-300 text-xs font-medium",
+                  "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md",
+                  "data-[state=active]:scale-[1.05] data-[state=inactive]:text-muted-foreground",
+                  "hover:bg-primary/10 hover:text-foreground"
+                )}
+              >
+                🌍 Global
+              </TabsTrigger>
             </TabsList>
 
             {templatesLoading ? (
@@ -994,25 +1116,36 @@ export default function AIPhotoshoot() {
                           : "border-border/50 shadow-sm"
                       )}
                     >
-                      <div className="aspect-square bg-muted/30 rounded-lg mb-3 overflow-hidden flex items-center justify-center p-2">
+                      <div className="aspect-square bg-muted/30 rounded-lg mb-3 overflow-hidden relative flex items-center justify-center">
                         {template.previewUrl ? (
                           <img 
                             src={template.previewUrl} 
                             alt={template.name}
-                            className="w-full h-full object-contain"
+                            className="max-w-full max-h-full w-auto h-auto object-contain"
+                            loading="lazy"
                             onError={(e) => {
-                              // Fallback to placeholder if image fails to load
+                              console.error(`❌ Failed to load template image for ${template.name}:`, template.previewUrl);
                               const target = e.target as HTMLImageElement;
-                              target.style.display = 'none';
                               const parent = target.parentElement;
                               if (parent) {
-                                parent.innerHTML = '<div class="w-full h-full flex items-center justify-center"><Camera class="w-8 h-8 text-muted-foreground/40" /></div>';
+                                parent.innerHTML = `
+                                  <div class="w-full h-full flex flex-col items-center justify-center gap-2 bg-muted/50">
+                                    <svg class="w-8 h-8 text-muted-foreground/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                                    </svg>
+                                    <span class="text-[10px] text-muted-foreground/60 text-center px-2">Image not found</span>
+                                  </div>
+                                `;
                               }
+                            }}
+                            onLoad={() => {
+                              console.log(`✅ Successfully loaded: ${template.name} from ${template.previewUrl}`);
                             }}
                           />
                         ) : (
-                          <div className="w-full h-full flex items-center justify-center">
+                          <div className="w-full h-full flex flex-col items-center justify-center gap-2">
                             <Camera className="w-8 h-8 text-muted-foreground/40" />
+                            <span className="text-[10px] text-muted-foreground/60">No preview URL</span>
                           </div>
                         )}
                       </div>
@@ -1030,10 +1163,27 @@ export default function AIPhotoshoot() {
                 </TabsContent>
               ))
             ) : templatesError ? (
-              <div className="p-4 bg-destructive/10 rounded-lg border border-destructive/20 text-center">
-                <p className="text-sm text-destructive">
-                  Failed to load templates. Make sure the backend is running at {import.meta.env.VITE_PHOTOSHOOT_API_URL || "http://localhost:8000"}
-                </p>
+              <div className="p-4 bg-destructive/10 rounded-lg border-2 border-destructive/30 text-left space-y-3">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 space-y-2">
+                    <p className="text-sm font-semibold text-destructive">
+                      Backend Connection Failed
+                    </p>
+                    <p className="text-xs text-destructive/80">
+                      Failed to load templates. Make sure the backend is running at <code className="bg-destructive/20 px-1.5 py-0.5 rounded text-[10px] font-mono">{import.meta.env.VITE_PHOTOSHOOT_API_URL || "https://ai-photoshoot-f9qy.onrender.com"}</code>
+                    </p>
+                    <div className="p-3 bg-muted/50 rounded-lg border border-border/50 space-y-2 mt-3">
+                      <p className="text-xs font-medium text-foreground">Quick Setup:</p>
+                      <ol className="text-[10px] text-muted-foreground space-y-1.5 list-decimal list-inside">
+                        <li>Navigate to <code className="bg-muted px-1 rounded">ai-photoshoot-proto-main/backend</code></li>
+                        <li>Install dependencies: <code className="bg-muted px-1 rounded">pip install -r requirements.txt</code></li>
+                        <li>Create <code className="bg-muted px-1 rounded">.env</code> file with <code className="bg-muted px-1 rounded">GEMINI_API_KEY=your_key</code></li>
+                        <li>Start server: <code className="bg-muted px-1 rounded">uvicorn main:app --reload --port 8000</code></li>
+                      </ol>
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : null}
           </Tabs>
@@ -1097,52 +1247,131 @@ export default function AIPhotoshoot() {
             )}
             onDrop={handleDrop}
             onDragOver={handleDragOver}
-            onClick={!uploadedImage ? handleBrowseFiles : undefined}
+            onClick={!uploadedImage && generatedViews.length === 0 ? handleBrowseFiles : undefined}
           >
-            {isGenerating ? (
-              <div className="flex flex-col items-center justify-center h-full space-y-4">
-                <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                <span className="text-sm text-muted-foreground">Generating 3 views...</span>
-                <Progress value={undefined} className="w-2/3" />
+            {isGenerating && generatedViews.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full space-y-3 py-8">
+                <div className="relative">
+                  <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                  <div className="absolute inset-0 rounded-full border-2 border-primary/20 animate-pulse" />
+                </div>
+                <div className="text-center space-y-1">
+                  <span className="text-sm font-medium text-foreground block">Generating 3 views...</span>
+                  <span className="text-xs text-muted-foreground block">This may take 20-30 seconds</span>
+                </div>
+                <Progress value={undefined} className="w-2/3 h-1.5" />
               </div>
             ) : generatedViews.length > 0 ? (
-              <div className="relative w-full h-full">
-                <Tabs defaultValue={generatedViews[0]?.view} className="w-full h-full">
-                  <TabsList className="grid w-full grid-cols-3 mb-2">
+              <div className="relative w-full h-full flex flex-col p-3">
+                <Tabs defaultValue={generatedViews[0]?.view} className="w-full h-full flex flex-col">
+                  <TabsList className="grid w-full grid-cols-3 mb-3 h-9 bg-background/95 backdrop-blur-sm border border-border/50 rounded-lg p-1 shrink-0">
                     {generatedViews.map((view) => (
-                      <TabsTrigger key={view.view} value={view.view}>
+                      <TabsTrigger
+                        key={view.view}
+                        value={view.view}
+                        className={cn(
+                          "relative transition-all duration-300 text-xs font-medium py-1.5",
+                          "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md",
+                          "data-[state=active]:scale-[1.05] data-[state=inactive]:text-muted-foreground",
+                          "hover:bg-primary/10 hover:text-foreground",
+                          "flex items-center justify-center gap-1.5"
+                        )}
+                      >
+                        {view.view === "Front" && <Camera className="w-3 h-3" />}
+                        {view.view === "Side" && <ArrowRight className="w-3 h-3 rotate-90" />}
+                        {view.view === "Angle" && <Zap className="w-3 h-3" />}
                         {view.view}
                       </TabsTrigger>
                     ))}
                   </TabsList>
-                  {generatedViews.map((view) => (
-                    <TabsContent key={view.view} value={view.view} className="mt-0 m-0 h-[calc(100%-60px)]">
-                      <button
-                        type="button"
-                        className="w-full h-full rounded-lg overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-                        onClick={() => setPhotoshootExpandedImageUrl(view.imageUrl)}
-                        aria-label={`Expand ${view.view} view`}
-                      >
-                        <img 
-                          src={view.imageUrl} 
-                          alt={`${view.view} view`}
-                          className="w-full h-full object-contain rounded-lg"
-                        />
-                      </button>
-                    </TabsContent>
-                  ))}
+                  <div className="flex-1 min-h-0 overflow-auto">
+                    {generatedViews.map((view) => (
+                      <TabsContent key={view.view} value={view.view} className="mt-0 h-full flex items-center justify-center p-2">
+                        <div className="relative w-full h-full flex items-center justify-center bg-muted/30 rounded-xl p-4 group" style={{ minHeight: '400px' }}>
+                          <button
+                            type="button"
+                            className="w-full h-full rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 transition-transform hover:scale-[1.02] flex items-center justify-center"
+                            onClick={() => setPhotoshootExpandedImageUrl(view.imageUrl)}
+                            aria-label={`Expand ${view.view} view`}
+                          >
+                            <img 
+                              src={view.imageUrl} 
+                              alt={`${view.view} view`}
+                              className="max-w-full max-h-full w-auto h-auto object-contain rounded-lg shadow-lg"
+                              loading="eager"
+                              decoding="async"
+                              fetchPriority="high"
+                              style={{ 
+                                maxHeight: 'calc(100% - 2rem)', 
+                                maxWidth: 'calc(100% - 2rem)',
+                                display: 'block'
+                              }}
+                              onError={(e) => {
+                                console.error(`Failed to load ${view.view} view:`, view.imageUrl?.substring(0, 50));
+                                const target = e.target as HTMLImageElement;
+                                const parent = target.parentElement?.parentElement;
+                                if (parent) {
+                                  parent.innerHTML = `
+                                    <div class="flex flex-col items-center justify-center text-center p-4 w-full h-full">
+                                      <AlertCircle class="w-8 h-8 text-destructive mb-2" />
+                                      <p class="text-sm text-destructive">Failed to load image</p>
+                                      <p class="text-xs text-muted-foreground mt-1">Check console for details</p>
+                                    </div>
+                                  `;
+                                }
+                              }}
+                              onLoad={() => {
+                                console.log(`Successfully loaded ${view.view} view`);
+                              }}
+                            />
+                          </button>
+                          {isGenerating && (
+                            <div className="absolute top-2 left-2 bg-primary/90 text-primary-foreground text-[10px] px-2 py-1 rounded z-10">
+                              {generatedViews.length}/3
+                            </div>
+                          )}
+                          <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                            <Button
+                              variant="destructive"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveImage();
+                              }}
+                            >
+                              <X className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        </div>
+                      </TabsContent>
+                    ))}
+                  </div>
                 </Tabs>
               </div>
             ) : uploadedImage ? (
-              <div className="relative w-full h-full">
+              <div className="relative w-full h-full p-3 flex items-center justify-center group">
                 <img 
                   src={uploadedImage} 
                   alt="Uploaded product" 
-                  className="w-full h-full object-contain"
+                  className="max-w-full max-h-full w-auto h-auto object-contain rounded-lg shadow-lg"
                 />
+                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Button
+                    variant="destructive"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRemoveImage();
+                    }}
+                  >
+                    <X className="w-3 h-3" />
+                  </Button>
+                </div>
                 {uploadedFileName && (
                   <div className="absolute bottom-2 left-2 right-2">
-                    <div className="bg-black/70 text-white text-xs px-2 py-1 rounded truncate">
+                    <div className="bg-black/70 text-white text-[10px] px-2 py-1 rounded backdrop-blur-sm truncate">
                       {uploadedFileName}
                     </div>
                   </div>
@@ -1192,18 +1421,18 @@ export default function AIPhotoshoot() {
 
           <div className="flex gap-2">
             <Button 
-              className="flex-1 gap-2" 
+              className="flex-1 gap-1.5 h-8 text-xs" 
               onClick={handleGeneratePhotoshoot}
               disabled={isGenerating || !uploadedFile || !selectedTemplate}
             >
               {isGenerating ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Generating 3 Views...
+                  <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                  Generating...
                 </>
               ) : (
                 <>
-                  <Sparkles className="w-4 h-4" />
+                  <Sparkles className="w-3 h-3" />
                   Generate 3 Views
                 </>
               )}
