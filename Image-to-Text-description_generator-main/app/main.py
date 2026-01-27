@@ -288,6 +288,17 @@ async def approve_translations(payload: dict = Body(...)):
         "message": "All translations approved successfully"
     }
 
+# Root endpoint (for Render / browser / health checks)
+@app.get("/")
+@app.head("/")
+async def root():
+    log.info("root | GET /")
+    return {
+        "status": "ok",
+        "service": "Image-to-Text Vision API",
+        "backend": os.environ.get("VISION_BACKEND", "gpt4o")
+    }
+
 # -------------------- Main --------------------
 if __name__ == "__main__":
     import uvicorn
