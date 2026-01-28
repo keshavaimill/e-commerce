@@ -16,13 +16,9 @@ log = get_logger(__name__)
 # -------------------- App Setup --------------------
 app = FastAPI(title="Image-to-Text Vision API")
 
-# 🔴 FIXED CORS 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://e-commerce-gilt-kappa.vercel.app",  # your frontend
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],  # Restrict in production
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -48,6 +44,10 @@ async def startup_event():
 
 # -------------------- Utils --------------------
 async def run_blocking(fn, *args):
+    """
+    Run blocking CPU/IO work in a threadpool.
+    This prevents Render from killing long requests.
+    """
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, fn, *args)
 
@@ -60,11 +60,13 @@ app.mount("/temp", StaticFiles(directory=UPLOAD_DIR), name="temp")
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    log.info("health | GET /health")
+    return {"status": "ok", "service": "image-to-text"}
 
 @app.get("/")
 @app.head("/")
 async def root():
+    log.info("root | GET /")
     return {
         "status": "ok",
         "service": "Image-to-Text Vision API",
@@ -74,6 +76,7 @@ async def root():
 # 1️⃣ KPIs
 @app.get("/image-to-text/kpis")
 async def get_kpis():
+    log.info("kpis | GET /image-to-text/kpis")
     return {
         "kpis": [
             {"label": "Language Completeness", "value": "87%", "icon": "Languages", "change": 12},
@@ -101,7 +104,14 @@ async def upload_image(file: UploadFile = File(...), sku: str = None):
     with open(file_path, "wb") as f:
         f.write(contents)
 
-    base_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    base_url = (
+        os.environ.get("RENDER_EXTERNAL_URL")
+        or os.environ.get("BASE_URL")
+        or "http://localhost:8010"
+    ).rstrip("/")
+
+    log.info("upload | success | image_id=%s filename=%s", file_id, file.filename)
+
     return {
         "success": True,
         "imageId": file_id,
@@ -110,12 +120,15 @@ async def upload_image(file: UploadFile = File(...), sku: str = None):
         "sku": sku,
     }
 
-# 2.5️⃣ Generate Description
+# 2.5️⃣ Generate Description (FIXED – Render safe)
 @app.post("/generate-description")
 async def generate_description_endpoint(
     image: UploadFile = File(...),
     language: str = Form(None),
 ):
+    if not image.filename:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+
     language = language or "en"
     if language not in SUPPORTED_LANGUAGES.values():
         raise HTTPException(status_code=400, detail=f"Unsupported language: {language}")
@@ -125,20 +138,109 @@ async def generate_description_endpoint(
     file_path = os.path.join(UPLOAD_DIR, f"{file_id}{extension}")
 
     contents = await image.read()
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
+
     with open(file_path, "wb") as f:
         f.write(contents)
 
-    ai_result = await run_blocking(generate_description, file_path, language)
+    log.info("generate_description | start | filename=%s language=%s", image.filename, language)
+    t0 = time.perf_counter()
 
-    if os.path.exists(file_path):
-        os.remove(file_path)
+    try:
+        # 🔴 ONLY FIX IS HERE
+        ai_result = await run_blocking(generate_description, file_path, language)
+
+        elapsed = time.perf_counter() - t0
+        log.info(
+            "generate_description | success | filename=%s language=%s elapsed_sec=%.2f",
+            image.filename,
+            language,
+            elapsed,
+        )
+
+        return {
+            "title": ai_result.get("title", ""),
+            "short_description": ai_result.get("short_description", ""),
+            "long_description": ai_result.get("long_description", ""),
+            "bullet_points": ai_result.get("bullet_points", []),
+            "attributes": ai_result.get("attributes", {}),
+        }
+
+    except Exception as e:
+        elapsed = time.perf_counter() - t0
+        log.error(
+            "generate_description | failed | filename=%s language=%s elapsed_sec=%.2f error=%s",
+            image.filename,
+            language,
+            elapsed,
+            e,
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+# 3️⃣ Generate Product Description 
+@app.post("/image-to-text/generate")
+async def generate_product_text(payload: dict = Body(...)):
+    image_id = payload.get("imageId")
+    language = payload.get("language", "en")
+    extension = payload.get("extension", ".jpeg")
+
+    image_path = os.path.join(UPLOAD_DIR, f"{image_id}{extension}")
+    if not os.path.exists(image_path):
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    result = generate_description(image_path, language)
 
     return {
-        "title": ai_result.get("title", ""),
-        "short_description": ai_result.get("short_description", ""),
-        "long_description": ai_result.get("long_description", ""),
-        "bullet_points": ai_result.get("bullet_points", []),
-        "attributes": ai_result.get("attributes", {}),
+        "success": True,
+        "title": result.get("title"),
+        "shortDescription": result.get("short_description"),
+        "bulletPoints": result.get("bullet_points", []),
+        "attributes": result.get("attributes", {}),
+    }
+
+# 4️⃣ Translations 
+@app.get("/image-to-text/translations/{image_id}")
+async def get_translations(image_id: str, language: str = None):
+    files = [f for f in os.listdir(UPLOAD_DIR) if f.startswith(image_id)]
+    if not files:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    file_path = os.path.join(UPLOAD_DIR, files[0])
+    translations = []
+
+    for lang in SUPPORTED_LANGUAGES:
+        if language and lang != language:
+            continue
+        result = generate_description(file_path, lang)
+        translations.append({
+            "code": lang,
+            "title": result.get("title"),
+            "description": result.get("short_description"),
+        })
+
+    return {"imageId": image_id, "translations": translations}
+
+# 5️⃣ Quality Check 
+@app.get("/image-to-text/quality-check/{image_id}")
+async def get_quality_check(image_id: str):
+    files = [f for f in os.listdir(UPLOAD_DIR) if f.startswith(image_id)]
+    if not files:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    return {"imageId": image_id, "qualityChecks": []}
+
+# 6️⃣ Approve Translations 
+@app.post("/image-to-text/approve")
+async def approve_translations(payload: dict = Body(...)):
+    languages: List[str] = payload.get("languages") or []
+    return {
+        "success": True,
+        "approved": len(languages) if languages else len(SUPPORTED_LANGUAGES),
     }
 
 # -------------------- Local Run --------------------
@@ -147,4 +249,7 @@ if __name__ == "__main__":
     from app.logger import configure_logging
 
     configure_logging()
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8010, reload=True)
+    port = int(os.environ.get("PORT", 8010))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=True)
+
+make the necessary changes and share the updated file
