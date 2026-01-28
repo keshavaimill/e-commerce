@@ -18,7 +18,10 @@ app = FastAPI(title="Image-to-Text Vision API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
+    allow_origins=[
+        "https://e-commerce-gilt-kappa.vercel.app",
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
